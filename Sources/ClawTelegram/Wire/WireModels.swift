@@ -18,10 +18,60 @@ struct TResponseParameters: Decodable {
 struct TUser: Decodable {
   let id: Int64
   let is_bot: Bool?
+  let first_name: String?
+  let last_name: String?
   let username: String?
+
+  var sender: TelegramSender {
+    let displayName = [first_name, last_name]
+      .compactMap { $0 }
+      .filter { $0.isEmpty == false }
+      .joined(separator: " ")
+    return TelegramSender(
+      kind: .user,
+      id: id,
+      displayName: displayName.isEmpty ? nil : displayName,
+      username: username,
+      isBot: is_bot ?? false
+    )
+  }
 }
 struct TChat: Decodable {
   let id: Int64
+  let type: String?
+  let title: String?
+  let username: String?
+  let is_forum: Bool?
+
+  var chatType: TelegramChatType {
+    switch type {
+    case TelegramChatType.privateChat.rawValue: .privateChat
+    case TelegramChatType.group.rawValue: .group
+    case TelegramChatType.supergroup.rawValue: .supergroup
+    case TelegramChatType.channel.rawValue: .channel
+    default: .unknown
+    }
+  }
+
+  var sender: TelegramSender {
+    TelegramSender(kind: .chat, id: id, displayName: title, username: username)
+  }
+}
+
+struct TMessageEntity: Decodable {
+  let type: String
+  let offset: Int
+  let length: Int
+  let user: TUser?
+
+  var entity: TelegramMessageEntity {
+    TelegramMessageEntity(
+      type: type,
+      offset: offset,
+      length: length,
+      mentionedUserId: user?.id
+    )
+  }
 }
 
 /// Media markers — presence is all that's needed to classify an unsupported kind.
@@ -83,9 +133,13 @@ struct TFile: Decodable {
 struct TMessage: Decodable {
   let message_id: Int64
   let from: TUser?
+  let sender_chat: TChat?
   let chat: TChat
+  let message_thread_id: Int64?
   let text: String?
+  let entities: [TMessageEntity]?
   let caption: String?
+  let caption_entities: [TMessageEntity]?
   let photo: [TPhotoSize]?
   let voice: TVoice?
   let document: TPresence?
@@ -114,13 +168,17 @@ struct TMessage: Decodable {
   func toRawMessage() -> RawMessage {
     RawMessage(
       messageId: message_id,
-      fromUserId: from?.id,
+      fromUserId: sender_chat?.id ?? from?.id,
       chatId: chat.id,
       text: text,
       caption: caption,
       mediaKind: mediaKind,
       voice: voice?.attachment,
-      photo: photoAttachment
+      photo: photoAttachment,
+      chatType: chat.chatType,
+      messageThreadId: message_thread_id,
+      sender: sender_chat?.sender ?? from?.sender,
+      entities: (text == nil ? caption_entities : entities)?.map(\.entity) ?? []
     )
   }
 }
@@ -140,6 +198,7 @@ struct LinkPreviewOptions: Encodable {
 
 struct SendRichMessageDraftRequest: Encodable {
   let chatId: Int64
+  let messageThreadId: Int64?
   let draftId: Int64
   let richMessage: InputRichMessage
   let linkPreviewOptions: LinkPreviewOptions

@@ -5,13 +5,18 @@ import Foundation
 /// `runs.origin`.
 public enum RunOrigin: String, Sendable, Equatable {
   case interactive
+  case group
   case scheduled
   case heartbeat
 
   /// True for the origins that run with no owner present (a scheduled job or heartbeat fire) —
   /// the pair every proactive gate (budget, prompt selection, context isolation) keys on.
   public var isProactive: Bool {
-    self != .interactive
+    self == .scheduled || self == .heartbeat
+  }
+
+  public var isGroup: Bool {
+    self == .group
   }
 }
 

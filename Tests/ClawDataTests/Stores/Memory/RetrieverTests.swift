@@ -41,6 +41,25 @@ import Testing
   }
 
   @discardableResult
+  private func insertGroupSession(
+    _ db: Database,
+    key: String,
+    chatId: Int64,
+    threadId: Int64?
+  ) throws -> Int64 {
+    let when = Date(timeIntervalSince1970: 1)
+    try db.execute(
+      sql: """
+        INSERT INTO sessions(session_key, created_ts, updated_ts, tainted, conversation_kind,
+          telegram_chat_id, telegram_thread_id)
+        VALUES (?, ?, ?, 1, ?, ?, ?)
+        """,
+      arguments: [key, when, when, ConversationKind.group.rawValue, chatId, threadId]
+    )
+    return db.lastInsertedRowID
+  }
+
+  @discardableResult
   private func insertMessage(
     _ corpus: Corpus,
     sessionId: Int64,
@@ -266,5 +285,111 @@ import Testing
     // then
     #expect(blank.isEmpty)
     #expect(punctuation.isEmpty)
+  }
+
+  @Test func groupRecallCrossesTopicsButNeverCrossesTheConfiguredChatBoundary() throws {
+    // given
+    let queue = try ClawDatabase.makeInMemoryQueue()
+    try ClawDatabase.migrate(queue)
+    let chatId: Int64 = -1_001_234
+    let sessions = try queue.write { db in
+      (
+        current: try insertGroupSession(
+          db,
+          key: SessionKey.telegramGroup(chatId: chatId, messageThreadId: 1),
+          chatId: chatId,
+          threadId: 1
+        ),
+        sibling: try insertGroupSession(
+          db,
+          key: SessionKey.telegramGroup(chatId: chatId, messageThreadId: 2),
+          chatId: chatId,
+          threadId: 2
+        ),
+        otherChat: try insertGroupSession(
+          db,
+          key: SessionKey.telegramGroup(chatId: -1_009_999, messageThreadId: 2),
+          chatId: -1_009_999,
+          threadId: 2
+        ),
+        personal: try insertSession(db, key: SessionKey.telegramDM(chatId: 42))
+      )
+    }
+    let corpus = Corpus(
+      retriever: RetrieverGRDB(writer: queue),
+      queue: queue,
+      sessionOne: sessions.current,
+      sessionTwo: sessions.sibling
+    )
+    let expectedId = try insertMessage(
+      corpus,
+      sessionId: sessions.sibling,
+      content: "launchcode shared sibling topic",
+      provenance: .untrusted,
+      at: 10
+    )
+    _ = try insertMessage(
+      corpus,
+      sessionId: sessions.otherChat,
+      content: "launchcode from another group",
+      provenance: .untrusted,
+      at: 20
+    )
+    _ = try insertMessage(
+      corpus,
+      sessionId: sessions.personal,
+      content: "launchcode from owner DM",
+      at: 30
+    )
+
+    // when
+    let hits = try corpus.retriever.searchRelevantMessages(
+      query: "launchcode",
+      currentSessionId: sessions.current,
+      windowStartMessageId: nil,
+      excludedMessageIds: [],
+      scope: .telegramGroup,
+      limit: 10
+    )
+
+    // then
+    #expect(hits.map(\.id) == [expectedId])
+  }
+
+  @Test func personalRecallNeverSurfacesTrustedGroupRows() throws {
+    // given
+    let corpus = try makeCorpus()
+    let groupSession = try corpus.queue.write { db in
+      try insertGroupSession(
+        db,
+        key: SessionKey.telegramGroup(chatId: -1_001_234, messageThreadId: nil),
+        chatId: -1_001_234,
+        threadId: nil
+      )
+    }
+    _ = try insertMessage(
+      corpus,
+      sessionId: groupSession,
+      content: "boundaryword group answer",
+      at: 10
+    )
+    let personalId = try insertMessage(
+      corpus,
+      sessionId: corpus.sessionOne,
+      content: "boundaryword personal answer",
+      at: 20
+    )
+
+    // when
+    let hits = try corpus.retriever.searchRelevantMessages(
+      query: "boundaryword",
+      currentSessionId: corpus.sessionTwo,
+      windowStartMessageId: nil,
+      excludedMessageIds: [],
+      limit: 10
+    )
+
+    // then
+    #expect(hits.map(\.id) == [personalId])
   }
 }

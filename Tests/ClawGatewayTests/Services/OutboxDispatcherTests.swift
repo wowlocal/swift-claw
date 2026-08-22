@@ -56,6 +56,59 @@ private actor ReplyMarkupSpy: MessageDelivery {
   }
 }
 
+private actor DestinationDeliverySpy: MessageDelivery {
+  private let failingDestination: TelegramDestination
+  private(set) var delivered: [TelegramDestination] = []
+
+  init(failingDestination: TelegramDestination) {
+    self.failingDestination = failingDestination
+  }
+
+  func sendMessage(chatId: Int64, text: String, replyMarkup: String?) async throws -> Int64 {
+    try await sendMessage(
+      destination: TelegramDestination(chatId: chatId),
+      text: text,
+      replyMarkup: replyMarkup
+    )
+  }
+
+  func sendMessage(
+    destination: TelegramDestination,
+    text: String,
+    replyMarkup: String?
+  ) async throws -> Int64 {
+    if destination == failingDestination {
+      throw TelegramError.transport("destination down")
+    }
+    delivered.append(destination)
+    return Int64(delivered.count)
+  }
+
+  func sendRichMessage(
+    chatId: Int64,
+    markdown: String,
+    replyMarkup: String?
+  ) async throws -> Int64 {
+    try await sendRichMessage(
+      destination: TelegramDestination(chatId: chatId),
+      markdown: markdown,
+      replyMarkup: replyMarkup
+    )
+  }
+
+  func sendRichMessage(
+    destination: TelegramDestination,
+    markdown: String,
+    replyMarkup: String?
+  ) async throws -> Int64 {
+    if destination == failingDestination {
+      throw TelegramError.transport("destination down")
+    }
+    delivered.append(destination)
+    return Int64(delivered.count)
+  }
+}
+
 @Suite struct OutboxDispatcherTests {
   private struct Fixture {
     let outbox: OutboxStoreGRDB
@@ -192,6 +245,48 @@ private actor ReplyMarkupSpy: MessageDelivery {
     let deliveredMarkdown = await transport.richSends.map { $0.markdown }
     #expect(deliveredMarkdown == ["hello"])
     #expect(try fixture.outbox.pendingOutbound().count == 1)
+  }
+
+  @Test func aFailingTopicDoesNotBlockAnotherTopicInTheSameDrain() async throws {
+    // given
+    let fixture = try makeFixture()
+    let failing = TelegramDestination(chatId: -1_001_234, messageThreadId: 10)
+    let healthy = TelegramDestination(chatId: -1_001_234, messageThreadId: 20)
+    _ = try fixture.outbox.claimOutbound(
+      runId: fixture.runId,
+      chunk: OutboxChunk(
+        stepIndex: 0,
+        chatId: failing.chatId,
+        messageThreadId: failing.messageThreadId,
+        payload: "first topic",
+        payloadHash: "h1"
+      )
+    )
+    _ = try fixture.outbox.claimOutbound(
+      runId: fixture.runId,
+      chunk: OutboxChunk(
+        stepIndex: 1,
+        chatId: healthy.chatId,
+        messageThreadId: healthy.messageThreadId,
+        payload: "second topic",
+        payloadHash: "h2"
+      )
+    )
+    let delivery = DestinationDeliverySpy(failingDestination: failing)
+    let dispatcher = OutboxDispatcher(
+      outbox: fixture.outbox,
+      delivery: delivery,
+      signal: OutboxSignal(),
+      logger: TestLog.silent
+    )
+
+    // when
+    await dispatcher.drainOnce()
+
+    // then — only the failing destination remains pending; the healthy topic kept its thread id
+    #expect(await delivery.delivered == [healthy])
+    let pending = try fixture.outbox.pendingOutbound()
+    #expect(pending.map(\.destination) == [failing])
   }
 
   @Test func dispatcherForwardsReplyMarkupOnTheRichSend() async throws {

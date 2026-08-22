@@ -24,10 +24,10 @@ struct TypingTurnRuntime: Sendable {
   /// to the return/throw contract the runtime's accounting reads: a response returns, a typed failure
   /// rethrows, and a won deadline throws the cancellation marker its disposition names.
   func run(
-    chatId: Int64,
+    destination: TelegramDestination,
     request: ChatRequest
   ) async throws -> ChatResponse {
-    try await withTypingPulse(chatId: chatId, indicator: typingIndicator, clock: clock) {
+    try await withTypingPulse(destination: destination, indicator: typingIndicator, clock: clock) {
       let outcome = await ProviderDeadlineCoordinator.raceBuffered(
         deadlineSeconds: wallClockDeadlineSeconds,
         clock: clock,

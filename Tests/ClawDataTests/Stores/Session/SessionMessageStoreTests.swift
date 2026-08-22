@@ -114,6 +114,77 @@ import Testing
     #expect(persistedTriggerMessageId == messageId)
   }
 
+  @Test func archiveOnlyGroupInboundPersistsConversationMetadataWithoutARun() throws {
+    // given
+    let queue = try ClawDatabase.makeInMemoryQueue()
+    try ClawDatabase.migrate(queue)
+    let store = SessionMessageStoreGRDB(writer: queue)
+    let chatId: Int64 = -1_001_234
+    let sender = TelegramSender(
+      kind: .user,
+      id: 7,
+      displayName: "Ada",
+      username: "ada"
+    )
+
+    // when
+    let result = try store.claimAndPersistInbound(
+      InboundMessage(
+        updateId: 9,
+        sessionKey: SessionKey.telegramGroup(chatId: chatId, messageThreadId: 81),
+        chatId: chatId,
+        userId: sender.id,
+        text: "background context",
+        isEdited: false,
+        provenance: .untrusted,
+        telegramMessageId: 501,
+        messageThreadId: 81,
+        sender: sender,
+        conversationKind: .group,
+        disposition: .archiveOnly,
+        ts: Date(timeIntervalSince1970: 9)
+      )
+    )
+
+    // then — the cursor claim, session, and message landed; no executable work was minted
+    #expect(result.newlyClaimed)
+    #expect(result.runId == nil)
+    #expect(result.triggerMessageId == nil)
+    let sessionId = try #require(result.sessionId)
+    let messageId = try #require(result.messageId)
+    let snapshot = try store.loadContextSnapshot(
+      sessionId: sessionId,
+      throughMessageId: messageId,
+      limit: 10
+    )
+    #expect(
+      snapshot.history == [
+        StoredMessage(
+          role: .user,
+          content: "background context",
+          provenance: .untrusted,
+          sender: sender
+        )
+      ]
+    )
+    let metadata = try #require(
+      try queue.read { db in
+        try Row.fetchOne(
+          db,
+          sql: """
+            SELECT conversation_kind, telegram_chat_id, telegram_thread_id
+            FROM sessions WHERE id = ?
+            """,
+          arguments: [sessionId]
+        )
+      }
+    )
+    #expect(metadata["conversation_kind"] as String == ConversationKind.group.rawValue)
+    #expect(metadata["telegram_chat_id"] as Int64 == chatId)
+    #expect(metadata["telegram_thread_id"] as Int64 == 81)
+    #expect(try queue.read { db in try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM runs") } == 0)
+  }
+
   @Test func duplicateUpdateIsNotReclaimedAndPersistsNothingNew() throws {
     // given
     let store = try freshStore()

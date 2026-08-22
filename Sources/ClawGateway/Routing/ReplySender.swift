@@ -34,10 +34,26 @@ struct ReplySender: Sendable {
     onFailure: StoreFailureReply = .retryUpdate,
     body: () throws -> Value
   ) async throws(RoutingHalt) -> Value {
+    try await perform(
+      operation,
+      updateId: updateId,
+      destination: TelegramDestination(chatId: chatId),
+      onFailure: onFailure,
+      body: body
+    )
+  }
+
+  func perform<Value: Sendable>(
+    _ operation: String,
+    updateId: Int64,
+    destination: TelegramDestination,
+    onFailure: StoreFailureReply = .retryUpdate,
+    body: () throws -> Value
+  ) async throws(RoutingHalt) -> Value {
     do {
       return try body()
     } catch StoreError.diskFull {
-      throw RoutingHalt(outcome: await storageFull(chatId: chatId))
+      throw RoutingHalt(outcome: await storageFull(destination: destination))
     } catch {
       logger.error("\(operation) failed for update \(updateId): \(error)")
       switch onFailure {
@@ -45,7 +61,11 @@ struct ReplySender: Sendable {
         throw RoutingHalt(outcome: .transientFailure)
       case .ack(let text):
         throw RoutingHalt(
-          outcome: await sendCommandAck(updateId: updateId, chatId: chatId, text: text)
+          outcome: await sendCommandAck(
+            updateId: updateId,
+            chatId: destination.chatId,
+            text: text
+          )
         )
       }
     }
@@ -109,8 +129,16 @@ struct ReplySender: Sendable {
   /// Best-effort "storage full" notice (the send may still succeed — a full disk doesn't break
   /// the network) and the signal for the poller to back off without advancing the offset.
   func storageFull(chatId: Int64) async -> HandleOutcome {
+    await storageFull(destination: TelegramDestination(chatId: chatId))
+  }
+
+  func storageFull(destination: TelegramDestination) async -> HandleOutcome {
     do {
-      _ = try await delivery.sendMessage(chatId: chatId, text: Degradation.storageFull)
+      _ = try await delivery.sendMessage(
+        destination: destination,
+        text: Degradation.storageFull,
+        replyMarkup: nil
+      )
     } catch {
       logger.error("failed to send storage-full notice: \(error)")
     }

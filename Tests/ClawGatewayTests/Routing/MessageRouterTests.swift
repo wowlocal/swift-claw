@@ -60,6 +60,7 @@ struct FullSessions: SessionMessageStore {
 
   private func makeHarness(
     allowed: [Int64],
+    groupChatId: Int64? = nil,
     doctor: any DoctorReporting = StubDoctorReporter()
   ) throws -> Harness {
     let queue = try ClawDatabase.makeInMemoryQueue()
@@ -79,6 +80,7 @@ struct FullSessions: SessionMessageStore {
       memoryCommands: MemoryCommandStoreGRDB(writer: queue),
       pendingConfirmations: PendingConfirmationRegistry(),
       botUsername: "claw_bot",
+      groupChatId: groupChatId,
       accessControl: AccessControl(allowlist: allowlist),
       delivery: transport,
       turnRunner: dispatcher,
@@ -134,6 +136,160 @@ struct FullSessions: SessionMessageStore {
 
     // then — the fused claim dedups, so only one turn runs
     #expect(await harness.dispatcher.calls.count == 1)
+  }
+
+  @Test func configuredGroupArchivesAmbientTextWithoutCreatingARun() async throws {
+    // given
+    let chatId: Int64 = -1_001_234
+    let harness = try makeHarness(allowed: [42], groupChatId: chatId)
+    let update = groupTextUpdate(
+      id: 1,
+      from: 7,
+      chatId: chatId,
+      threadId: 55,
+      text: "ambient discussion"
+    )
+
+    // when
+    let outcome = await harness.router.handle(rawUpdate: update)
+
+    // then — the update and author snapshot are durable, but no lane work exists
+    #expect(outcome == .processed)
+    #expect(await harness.dispatcher.calls.isEmpty)
+    #expect(try runStates(harness.queue).isEmpty)
+    let sessionKey = SessionKey.telegramGroup(chatId: chatId, messageThreadId: 55)
+    let sessionId = try #require(try harness.sessionMessages.findSession(sessionKey: sessionKey))
+    let snapshot = try harness.sessionMessages.loadContextSnapshot(
+      sessionId: sessionId,
+      throughMessageId: Int64.max,
+      limit: 50
+    )
+    #expect(snapshot.history.count == 1)
+    #expect(snapshot.history[0].content == "ambient discussion")
+    #expect(snapshot.history[0].provenance == .untrusted)
+    #expect(snapshot.history[0].sender?.id == 7)
+  }
+
+  @Test func exactMentionInConfiguredTopicCreatesAGroupRunAndKeepsTheThread() async throws {
+    // given — sender 7 is deliberately not the private owner; every member may mention the bot
+    let chatId: Int64 = -1_001_234
+    let harness = try makeHarness(allowed: [42], groupChatId: chatId)
+    let update = groupTextUpdate(
+      id: 2,
+      from: 7,
+      chatId: chatId,
+      threadId: 77,
+      text: "@claw_bot summarize this",
+      entities: [TelegramMessageEntity(type: "mention", offset: 0, length: 9)]
+    )
+
+    // when
+    let outcome = await harness.router.handle(rawUpdate: update)
+    await harness.dispatcher.waitForCalls(atLeast: 1)
+
+    // then
+    #expect(outcome == .processed)
+    let call = try #require(await harness.dispatcher.calls.first)
+    #expect(call.chatId == chatId)
+    #expect(call.messageThreadId == 77)
+    let storedOrigin = try await harness.queue.read { db in
+      try String.fetchOne(db, sql: "SELECT origin FROM runs WHERE id = ?", arguments: [call.runId])
+    }
+    let origin = try #require(storedOrigin)
+    #expect(origin == RunOrigin.group.rawValue)
+  }
+
+  @Test func captionMentionArchivesTheMediaMarkerAndStartsTheTopicRun() async throws {
+    // given
+    let chatId: Int64 = -1_001_234
+    let harness = try makeHarness(allowed: [42], groupChatId: chatId)
+    let photo = PhotoAttachment(sizes: [
+      PhotoSize(
+        fileId: "photo-file",
+        fileUniqueId: "photo-unique",
+        width: 320,
+        height: 240,
+        fileSizeBytes: 1_024
+      )
+    ])
+    let update = RawUpdate(
+      updateId: 5,
+      message: RawMessage(
+        messageId: 5,
+        fromUserId: 7,
+        chatId: chatId,
+        text: nil,
+        caption: "@claw_bot describe this",
+        mediaKind: PhotoAttachment.mediaKindDescription,
+        photo: photo,
+        chatType: .supergroup,
+        messageThreadId: 88,
+        sender: TelegramSender(kind: .user, id: 7, displayName: "Member"),
+        entities: [TelegramMessageEntity(type: "mention", offset: 0, length: 9)]
+      ),
+      editedMessage: nil
+    )
+
+    // when
+    let outcome = await harness.router.handle(rawUpdate: update)
+    await harness.dispatcher.waitForCalls(atLeast: 1)
+
+    // then
+    #expect(outcome == .processed)
+    let sessionKey = SessionKey.telegramGroup(chatId: chatId, messageThreadId: 88)
+    let sessionId = try #require(try harness.sessionMessages.findSession(sessionKey: sessionKey))
+    let snapshot = try harness.sessionMessages.loadContextSnapshot(
+      sessionId: sessionId,
+      throughMessageId: Int64.max,
+      limit: 10
+    )
+    #expect(snapshot.history.last?.content == "[Telegram photo]\n@claw_bot describe this")
+  }
+
+  @Test func mentionShapedTextWithoutAnEntityIsOnlyArchived() async throws {
+    // given
+    let chatId: Int64 = -1_001_234
+    let harness = try makeHarness(allowed: [42], groupChatId: chatId)
+
+    // when — Telegram did not classify the token as a mention entity
+    let outcome = await harness.router.handle(
+      rawUpdate: groupTextUpdate(
+        id: 3,
+        from: 7,
+        chatId: chatId,
+        threadId: nil,
+        text: "copied text says @claw_bot"
+      )
+    )
+
+    // then
+    #expect(outcome == .processed)
+    #expect(await harness.dispatcher.calls.isEmpty)
+    #expect(try messageCount(harness.queue, content: "copied text says @claw_bot") == 1)
+    #expect(try runStates(harness.queue).isEmpty)
+  }
+
+  @Test func messagesFromAnyUnconfiguredGroupAreIgnored() async throws {
+    // given
+    let configuredChatId: Int64 = -1_001_234
+    let harness = try makeHarness(allowed: [42], groupChatId: configuredChatId)
+
+    // when
+    let outcome = await harness.router.handle(
+      rawUpdate: groupTextUpdate(
+        id: 4,
+        from: 7,
+        chatId: -1_009_999,
+        threadId: nil,
+        text: "@claw_bot private?",
+        entities: [TelegramMessageEntity(type: "mention", offset: 0, length: 9)]
+      )
+    )
+
+    // then
+    #expect(outcome == .skipped)
+    #expect(await harness.dispatcher.calls.isEmpty)
+    #expect(try messageCount(harness.queue, content: "@claw_bot private?") == 0)
   }
 
   @Test func unknownSenderGetsPrivateBotReply() async throws {
@@ -638,6 +794,37 @@ struct FullSessions: SessionMessageStore {
       name: name,
       description: description,
       directory: URL(fileURLWithPath: "/tmp/skills/\(name)")
+    )
+  }
+
+  private func groupTextUpdate(
+    id: Int64,
+    from userId: Int64,
+    chatId: Int64,
+    threadId: Int64?,
+    text: String,
+    entities: [TelegramMessageEntity] = []
+  ) -> RawUpdate {
+    RawUpdate(
+      updateId: id,
+      message: RawMessage(
+        messageId: id,
+        fromUserId: userId,
+        chatId: chatId,
+        text: text,
+        caption: nil,
+        mediaKind: nil,
+        chatType: .supergroup,
+        messageThreadId: threadId,
+        sender: TelegramSender(
+          kind: .user,
+          id: userId,
+          displayName: "Member",
+          username: "member"
+        ),
+        entities: entities
+      ),
+      editedMessage: nil
     )
   }
 }

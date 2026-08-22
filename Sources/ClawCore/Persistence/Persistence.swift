@@ -95,6 +95,8 @@ public enum CostSource: String, Sendable, Equatable {
 
 public enum SessionKey {
   private static let dmPrefix = "tg:dm:"
+  private static let groupPrefix = "tg:group:"
+  private static let topicSeparator = ":topic:"
   private static let jobPrefix = "sched:job:"
 
   /// The heartbeat's dedicated persistent session. No chat id in the key —
@@ -105,6 +107,14 @@ public enum SessionKey {
     "\(dmPrefix)\(chatId)"
   }
 
+  public static func telegramGroup(chatId: Int64, messageThreadId: Int64?) -> String {
+    let base = "\(groupPrefix)\(chatId)"
+    guard let messageThreadId else {
+      return base
+    }
+    return "\(base)\(topicSeparator)\(messageThreadId)"
+  }
+
   /// A job's dedicated session, created lazily at first fire. No chat id in the key —
   /// the delivery target is `scheduled_jobs.owner_chat_id`, so `chatId(from:)` stays nil by design.
   public static func scheduledJob(id: Int64) -> String {
@@ -112,7 +122,56 @@ public enum SessionKey {
   }
 
   public static func chatId(from key: String) -> Int64? {
-    key.hasPrefix(dmPrefix) ? Int64(key.dropFirst(dmPrefix.count)) : nil
+    destination(from: key)?.chatId
+  }
+
+  public static func destination(from key: String) -> TelegramDestination? {
+    if key.hasPrefix(dmPrefix), let chatId = Int64(key.dropFirst(dmPrefix.count)) {
+      return TelegramDestination(chatId: chatId)
+    }
+
+    guard key.hasPrefix(groupPrefix) else {
+      return nil
+    }
+    let body = String(key.dropFirst(groupPrefix.count))
+    guard let separator = body.range(of: topicSeparator) else {
+      return Int64(body).map { TelegramDestination(chatId: $0) }
+    }
+    guard
+      let chatId = Int64(body[..<separator.lowerBound]),
+      let threadId = Int64(body[separator.upperBound...])
+    else {
+      return nil
+    }
+    return TelegramDestination(chatId: chatId, messageThreadId: threadId)
+  }
+
+  public static func conversationKind(from key: String) -> ConversationKind {
+    if key.hasPrefix(groupPrefix) {
+      return .group
+    }
+    if key == heartbeat || key.hasPrefix(jobPrefix) {
+      return .scheduled
+    }
+    return .privateChat
+  }
+}
+
+public enum ConversationKind: String, Sendable, Equatable {
+  case privateChat = "private"
+  case group
+  case scheduled
+}
+
+public enum InboundDisposition: Sendable, Equatable {
+  case archiveOnly
+  case startRun(origin: RunOrigin)
+
+  public var runOrigin: RunOrigin? {
+    guard case .startRun(let origin) = self else {
+      return nil
+    }
+    return origin
   }
 }
 
@@ -124,6 +183,11 @@ public struct InboundMessage: Sendable, Equatable {
   public let text: String
   public let isEdited: Bool
   public let provenance: Provenance
+  public let telegramMessageId: Int64?
+  public let messageThreadId: Int64?
+  public let sender: TelegramSender?
+  public let conversationKind: ConversationKind
+  public let disposition: InboundDisposition
   public let ts: Date
 
   public init(
@@ -134,6 +198,11 @@ public struct InboundMessage: Sendable, Equatable {
     text: String,
     isEdited: Bool,
     provenance: Provenance = .trusted,
+    telegramMessageId: Int64? = nil,
+    messageThreadId: Int64? = nil,
+    sender: TelegramSender? = nil,
+    conversationKind: ConversationKind = .privateChat,
+    disposition: InboundDisposition = .startRun(origin: .interactive),
     ts: Date
   ) {
     self.updateId = updateId
@@ -143,7 +212,16 @@ public struct InboundMessage: Sendable, Equatable {
     self.text = text
     self.isEdited = isEdited
     self.provenance = provenance
+    self.telegramMessageId = telegramMessageId
+    self.messageThreadId = messageThreadId
+    self.sender = sender
+    self.conversationKind = conversationKind
+    self.disposition = disposition
     self.ts = ts
+  }
+
+  public var destination: TelegramDestination {
+    TelegramDestination(chatId: chatId, messageThreadId: messageThreadId)
   }
 }
 
@@ -177,6 +255,7 @@ public struct StoredMessage: Sendable, Equatable {
   public let toolCallId: String?
   public let providerState: ProviderExchangeState?
   public let image: ImagePart?
+  public let sender: TelegramSender?
 
   public init(
     role: MessageRole,
@@ -185,7 +264,8 @@ public struct StoredMessage: Sendable, Equatable {
     toolCallsJSON: String? = nil,
     toolCallId: String? = nil,
     providerState: ProviderExchangeState? = nil,
-    image: ImagePart? = nil
+    image: ImagePart? = nil,
+    sender: TelegramSender? = nil
   ) {
     self.role = role
     self.content = content
@@ -194,6 +274,7 @@ public struct StoredMessage: Sendable, Equatable {
     self.toolCallId = toolCallId
     self.providerState = providerState
     self.image = image
+    self.sender = sender
   }
 }
 
@@ -293,6 +374,7 @@ public struct ProviderUsage: Sendable, Equatable {
 public struct OutboxChunk: Sendable, Equatable {
   public let stepIndex: Int
   public let chatId: Int64
+  public let messageThreadId: Int64?
   public let payload: String
   public let payloadHash: String
   public let approvalId: Int64?
@@ -301,6 +383,7 @@ public struct OutboxChunk: Sendable, Equatable {
   public init(
     stepIndex: Int,
     chatId: Int64,
+    messageThreadId: Int64? = nil,
     payload: String,
     payloadHash: String,
     approvalId: Int64? = nil,
@@ -308,10 +391,15 @@ public struct OutboxChunk: Sendable, Equatable {
   ) {
     self.stepIndex = stepIndex
     self.chatId = chatId
+    self.messageThreadId = messageThreadId
     self.payload = payload
     self.payloadHash = payloadHash
     self.approvalId = approvalId
     self.replyMarkup = replyMarkup
+  }
+
+  public var destination: TelegramDestination {
+    TelegramDestination(chatId: chatId, messageThreadId: messageThreadId)
   }
 }
 
@@ -319,6 +407,7 @@ public struct OutboxRow: Sendable, Equatable {
   public let runId: Int64
   public let stepIndex: Int
   public let chatId: Int64
+  public let messageThreadId: Int64?
   public let payload: String
   public let approvalId: Int64?
   public let replyMarkup: String?
@@ -327,6 +416,7 @@ public struct OutboxRow: Sendable, Equatable {
     runId: Int64,
     stepIndex: Int,
     chatId: Int64,
+    messageThreadId: Int64? = nil,
     payload: String,
     approvalId: Int64? = nil,
     replyMarkup: String? = nil
@@ -334,9 +424,14 @@ public struct OutboxRow: Sendable, Equatable {
     self.runId = runId
     self.stepIndex = stepIndex
     self.chatId = chatId
+    self.messageThreadId = messageThreadId
     self.payload = payload
     self.approvalId = approvalId
     self.replyMarkup = replyMarkup
+  }
+
+  public var destination: TelegramDestination {
+    TelegramDestination(chatId: chatId, messageThreadId: messageThreadId)
   }
 }
 
@@ -522,11 +617,13 @@ public struct ApprovalsHealth: Sendable, Equatable {
 
 public struct DegradationReply: Sendable, Equatable {
   public let chatId: Int64
+  public let messageThreadId: Int64?
   public let runId: Int64
   public let text: String
 
-  public init(chatId: Int64, runId: Int64, text: String) {
+  public init(chatId: Int64, messageThreadId: Int64? = nil, runId: Int64, text: String) {
     self.chatId = chatId
+    self.messageThreadId = messageThreadId
     self.runId = runId
     self.text = text
   }

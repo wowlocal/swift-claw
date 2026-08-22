@@ -38,19 +38,19 @@ extension RunStoreGRDB {
 
         let jobId: Int64? = row["job_id"]
         let sessionKey: String = row["session_key"]
-        let noticeChatId: Int64?
+        let noticeDestination: TelegramDestination?
         if let jobId {
-          noticeChatId = try Int64.fetchOne(
+          noticeDestination = try Int64.fetchOne(
             db,
             sql: "SELECT owner_chat_id FROM scheduled_jobs WHERE id = ?",
             arguments: [jobId]
-          )
+          ).map { TelegramDestination(chatId: $0) }
         } else if sessionKey == SessionKey.heartbeat {
           // The heartbeat session has no chat id anywhere in the DB — the notice rides the
           // config-derived owner target the boot caller resolved.
-          noticeChatId = heartbeatNoticeChatId
+          noticeDestination = heartbeatNoticeChatId.map { TelegramDestination(chatId: $0) }
         } else {
-          noticeChatId = SessionKey.chatId(from: sessionKey)
+          noticeDestination = SessionKey.destination(from: sessionKey)
         }
 
         // Suppress the notice only when the owner already saw a genuine REPLY. The newest SENT
@@ -69,7 +69,7 @@ extension RunStoreGRDB {
           arguments: [runId]
         )
         let ownerSawAReply = newestSent != nil && (newestSent?["approval_id"] as Int64?) == nil
-        guard ownerSawAReply == false, let chatId = noticeChatId else {
+        guard ownerSawAReply == false, let destination = noticeDestination else {
           continue
         }
 
@@ -78,12 +78,20 @@ extension RunStoreGRDB {
         // by the dedup key.
         let chunk = OutboxChunk(
           stepIndex: try Self.nextOutboxStepBase(db, runId: runId),
-          chatId: chatId,
+          chatId: destination.chatId,
+          messageThreadId: destination.messageThreadId,
           payload: degradationText,
           payloadHash: ContentHash.fnv1a(degradationText)
         )
         if try Self.insertOutbox(db, runId: runId, chunk: chunk, now: now) {
-          replies.append(DegradationReply(chatId: chatId, runId: runId, text: degradationText))
+          replies.append(
+            DegradationReply(
+              chatId: destination.chatId,
+              messageThreadId: destination.messageThreadId,
+              runId: runId,
+              text: degradationText
+            )
+          )
         }
       }
 

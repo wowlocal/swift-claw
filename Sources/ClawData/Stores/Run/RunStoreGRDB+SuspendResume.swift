@@ -435,6 +435,7 @@ private extension RunStoreGRDB {
       let linked = OutboxChunk(
         stepIndex: chunk.stepIndex,
         chatId: chunk.chatId,
+        messageThreadId: chunk.messageThreadId,
         payload: chunk.payload,
         payloadHash: chunk.payloadHash,
         approvalId: chunk.replyMarkup != nil ? approvalId : chunk.approvalId,

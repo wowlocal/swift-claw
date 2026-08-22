@@ -189,4 +189,39 @@ import Testing
     // then
     #expect(IncomingMessage.normalize(from: raw) == nil)
   }
+
+  @Test func exactMentionUsesTelegramUTF16EntityOffsets() {
+    // given — the leading emoji occupies two UTF-16 code units but one Swift Character
+    let incoming = IncomingMessage(
+      updateId: 7,
+      messageId: 7,
+      userId: 7,
+      chatId: -1_001_234,
+      content: .text("😀 hi @claw_bot"),
+      isEdited: false,
+      chatType: .supergroup,
+      entities: [TelegramMessageEntity(type: "mention", offset: 6, length: 9)]
+    )
+
+    // when / then
+    #expect(incoming.addressesBot(username: "claw_bot"))
+    #expect(incoming.addressesBot(username: "other_bot") == false)
+  }
+
+  @Test func mentionShapedTextWithoutTheMatchingEntityDoesNotAddressTheBot() {
+    // given
+    let incoming = IncomingMessage(
+      updateId: 8,
+      messageId: 8,
+      userId: 7,
+      chatId: -1_001_234,
+      content: .text("copied @claw_bot and @other_bot"),
+      isEdited: false,
+      chatType: .group,
+      entities: [TelegramMessageEntity(type: "mention", offset: 21, length: 10)]
+    )
+
+    // when / then
+    #expect(incoming.addressesBot(username: "claw_bot") == false)
+  }
 }

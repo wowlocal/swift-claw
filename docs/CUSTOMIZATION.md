@@ -366,6 +366,30 @@ fine — start it directly if you know that server is down. A token bound to a U
 longer uses fails `clawd doctor --check-config` the same way, with exit 10; `clawd mcp set-token
 <name>` repairs it.
 
+## Shared Telegram group
+
+Set `CLAW_TELEGRAM_GROUP_CHAT_ID` to one negative Telegram `chat.id` to enable a single group or
+supergroup, for example `-1001234567890`. Positive IDs, zero, malformed values, and additional
+groups are rejected or ignored. Restart clawd after changing it.
+
+Before enabling it, use BotFather's `/setprivacy` and choose **Disable**, then add the bot to the
+chat. Otherwise Telegram delivers mentions but withholds ordinary messages and the agent cannot
+see the surrounding conversation. To discover the ID without exposing message text, run clawd in
+the foreground with the setting absent and send one group message; the daemon logs the unconfigured
+numeric chat ID.
+
+All received text, captions, and media-presence markers are archived as untrusted history. An exact
+Telegram mention entity for `@your_bot` starts a model turn; mention-shaped copied text does not.
+Every member of the configured chat may mention it. Forum topics have independent FIFO lanes and
+recent-history windows, and every outbound chunk retains `message_thread_id`; full-text recall may
+find relevant messages in other topics only within the same configured chat.
+
+Group turns deliberately receive no owner workspace files, durable personal memory, skills,
+schedules, command/confirmation handling, approval flow, or tools. They cannot mutate the personal
+assistant. The archive starts when Telegram begins delivering updates; Bot API polling cannot fetch
+messages from before the bot joined or privacy mode was disabled. Unsetting the variable stops new
+group ingestion after restart but does not delete stored history.
+
 ## Everything else
 
 - `CLAW_ALLOWLIST`: numeric Telegram IDs, comma-separated, seeded into the allowlist at
@@ -375,6 +399,8 @@ longer uses fails `clawd doctor --check-config` the same way, with exit 10; `cla
   database in your state root (the `sqlite3` CLI is its own package on Linux:
   `sudo apt-get install -y sqlite3`):
   `sqlite3 "${CLAW_STATE_ROOT:-$HOME/.swift-claw}/claw.sqlite" "DELETE FROM allowlist WHERE user_id = <id>;"`
+- `CLAW_TELEGRAM_GROUP_CHAT_ID`: optional negative ID of the one shared Telegram group or
+  supergroup; see [Shared Telegram group](#shared-telegram-group).
 - `CLAW_APPROVAL_EXPIRY`: seconds before a pending approval auto-denies (default 3600).
 - `CLAW_SEARCH_API_KEY`: Exa key; unset means the `web_search` tool is absent. Adding it
   after you have sealed does nothing on its own: once `secrets.enc` exists the daemon reads

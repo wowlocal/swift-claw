@@ -63,7 +63,7 @@ struct StreamingTurnRuntime: Sendable {
   }
 
   func run(
-    chatId: Int64,
+    destination: TelegramDestination,
     draftId: Int64,
     request: ChatRequest
   ) async throws -> ChatResponse {
@@ -80,13 +80,18 @@ struct StreamingTurnRuntime: Sendable {
         await consumeStream(stream, snapshot: snapshot, box: box)
       },
       auxiliary: { box in
-        await runDraftAndTypingLoop(chatId: chatId, draftId: draftId, snapshot: snapshot, box: box)
+        await runDraftAndTypingLoop(
+          destination: destination,
+          draftId: draftId,
+          snapshot: snapshot,
+          box: box
+        )
       }
     )
 
     switch outcome {
     case .response(let response):
-      await sendFinalDraft(response.content, chatId: chatId, draftId: draftId)
+      await sendFinalDraft(response.content, destination: destination, draftId: draftId)
       return response
     case .failed(let error):
       throw error
@@ -99,7 +104,7 @@ struct StreamingTurnRuntime: Sendable {
       throw ProviderInferenceCancellation(observing: observedCompletionTokens)
     case .timedOut(.completed(let response)):
       // A completed stream is surfaced as `.response` above; kept exhaustive for the enum.
-      await sendFinalDraft(response.content, chatId: chatId, draftId: draftId)
+      await sendFinalDraft(response.content, destination: destination, draftId: draftId)
       return response
     }
   }
@@ -168,7 +173,7 @@ private extension StreamingTurnRuntime {
 
 private extension StreamingTurnRuntime {
   func runDraftAndTypingLoop(
-    chatId: Int64,
+    destination: TelegramDestination,
     draftId: Int64,
     snapshot: DraftSnapshot,
     box: ProviderRaceBox
@@ -188,13 +193,13 @@ private extension StreamingTurnRuntime {
 
       if let latest, mayDraft {
         lastSeenVersion = latest.version
-        await sendDraftBounded(latest.content, chatId: chatId, draftId: draftId)
+        await sendDraftBounded(latest.content, destination: destination, draftId: draftId)
         sentAnyDraft = true
         ticksSinceDraft = 0
       } else if !sentAnyDraft, ticksSinceTyping >= Self.ticksBetweenTyping {
         // Before the first visible frame the draft bubble doesn't exist yet, so the typing
         // action is the only progress signal; once a draft is out it takes over (~30s TTL).
-        await typingIndicator.sendTyping(chatId: chatId)
+        await typingIndicator.sendTyping(destination: destination)
         ticksSinceTyping = 0
       }
 
@@ -208,20 +213,32 @@ private extension StreamingTurnRuntime {
     }
   }
 
-  func sendFinalDraft(_ content: String, chatId: Int64, draftId: Int64) async {
+  func sendFinalDraft(
+    _ content: String,
+    destination: TelegramDestination,
+    draftId: Int64
+  ) async {
     guard !content.isEmpty, !Task.isCancelled else {
       return
     }
-    await sendDraftBounded(content, chatId: chatId, draftId: draftId)
+    await sendDraftBounded(content, destination: destination, draftId: draftId)
   }
 
   /// Awaits the sink but abandons it at `draftSendDeadline`: turn completion must never wedge on a
   /// stalled draft POST. The coordinator owns both children, so the abandoned send is cancelled and
   /// drained rather than left to outlive the turn — a structured replacement for the old detached
   /// send/deadline race.
-  func sendDraftBounded(_ markdown: String, chatId: Int64, draftId: Int64) async {
+  func sendDraftBounded(
+    _ markdown: String,
+    destination: TelegramDestination,
+    draftId: Int64
+  ) async {
     await ProviderDeadlineCoordinator.sendBounded(timeout: Self.draftSendDeadline, clock: clock) {
-      await draftStreamer.sendDraft(chatId: chatId, draftId: draftId, markdown: markdown)
+      await draftStreamer.sendDraft(
+        destination: destination,
+        draftId: draftId,
+        markdown: markdown
+      )
     }
   }
 }

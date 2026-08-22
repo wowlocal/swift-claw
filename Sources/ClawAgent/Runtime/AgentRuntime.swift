@@ -206,17 +206,20 @@ public struct AgentRuntime: Sendable {
 
     self.clock = clock
   }
+}
 
+public extension AgentRuntime {
   // swiftlint:disable function_parameter_count function_body_length cyclomatic_complexity
   /// The bounded agentic loop: one context assembly, then up to `maxTurns` round-trips
   /// with per-round-trip budget preflight, gated tool dispatch, and immediate usage/audit writes.
   /// A DELIBERATE SOFTENING of "no persistence here": `usageStore`/`auditLog` are injected
   /// so mid-run rows survive a crash. Throws ONLY `StoreError.diskFull`; every
   /// other failure resolves in-band to a `TurnResult`.
-  public func runTurn(
+  func runTurn(
     runId: Int64,
     sessionId: Int64,
     chatId: Int64,
+    messageThreadId: Int64? = nil,
     buildResult: BuildResult,
     sessionTainted: Bool,
     sessionHasPrivateData: Bool,
@@ -227,7 +230,9 @@ public struct AgentRuntime: Sendable {
     carryOver: ResumeUsage? = nil
   ) async throws -> TurnOutcome {
     let deadline = ContinuousClock.now + .seconds(budget.wallClockDeadlineSeconds)
-    let definitions = toolDefinitions
+    let destination = TelegramDestination(chatId: chatId, messageThreadId: messageThreadId)
+    let definitions = origin.isGroup ? [] : toolDefinitions
+    let activeToolDispatcher = origin.isGroup ? nil : toolDispatcher
     let fenceLabels = ToolFenceLabels(definitions: definitions)
     // A cooling primary starts the turn on the fallback, so the round-trip is spent on a route
     // that can answer instead of re-proving the wall.
@@ -361,7 +366,7 @@ public struct AgentRuntime: Sendable {
         do {
           response = try await roundTrip(
             provider: active.binding.provider,
-            chatId: chatId,
+            destination: destination,
             draftId: runId,
             request: request,
             deadlineSeconds: max(1, Int((deadline - ContinuousClock.now).components.seconds))
@@ -459,7 +464,7 @@ public struct AgentRuntime: Sendable {
       recordedRunTokens += intermediate.promptTokens + intermediate.completionTokens
       recordedRunUSD += intermediate.costUSD
 
-      await typingIndicator.sendTyping(chatId: chatId)
+      await typingIndicator.sendTyping(destination: destination)
       var observations: [ToolObservation] = []
       for call in response.toolCalls {
         proposedToolCalls += 1
@@ -480,7 +485,7 @@ public struct AgentRuntime: Sendable {
           approvalAlreadyPending: pendingSuspension != nil
         )
 
-        guard let toolDispatcher else {
+        guard let activeToolDispatcher else {
           observations.append(
             ToolObservation(
               callId: call.id,
@@ -495,7 +500,7 @@ public struct AgentRuntime: Sendable {
 
         turnLog.debug("tool \(call.name) invoked")
         let toolStart = ContinuousClock.now
-        let dispatched = await toolDispatcher.dispatch(call: call, context: context)
+        let dispatched = await activeToolDispatcher.dispatch(call: call, context: context)
         turnLog.debug(
           "tool \(call.name) done decision=\(dispatched.observation.status.rawValue) bytes=\(dispatched.observation.content.utf8.count) ms=\(Self.millis(ContinuousClock.now - toolStart))"
         )
@@ -661,7 +666,7 @@ private extension AgentRuntime {
   /// error; the loop maps it.
   func roundTrip(
     provider: any LLMProvider,
-    chatId: Int64,
+    destination: TelegramDestination,
     draftId: Int64,
     request: ChatRequest,
     deadlineSeconds: Int
@@ -669,7 +674,7 @@ private extension AgentRuntime {
     guard streamingEnabled else {
       return try await runTypingTurn(
         provider: provider,
-        chatId: chatId,
+        destination: destination,
         request: request,
         deadlineSeconds: deadlineSeconds
       )
@@ -683,7 +688,7 @@ private extension AgentRuntime {
     do {
       return try await runStreamingTurn(
         provider: provider,
-        chatId: chatId,
+        destination: destination,
         draftId: draftId,
         request: request,
         deadlineSeconds: deadlineSeconds
@@ -698,7 +703,7 @@ private extension AgentRuntime {
       // silently defeat the one-time buffered fallback.
       return try await runTypingTurn(
         provider: provider,
-        chatId: chatId,
+        destination: destination,
         request: request,
         deadlineSeconds: Self.remainingDeadlineSeconds(total: deadlineSeconds, since: streamStart)
       )
@@ -715,7 +720,7 @@ private extension AgentRuntime {
 
   func runStreamingTurn(
     provider: any LLMProvider,
-    chatId: Int64,
+    destination: TelegramDestination,
     draftId: Int64,
     request: ChatRequest,
     deadlineSeconds: Int
@@ -727,12 +732,12 @@ private extension AgentRuntime {
       wallClockDeadlineSeconds: deadlineSeconds,
       clock: clock
     )
-    return try await runtime.run(chatId: chatId, draftId: draftId, request: request)
+    return try await runtime.run(destination: destination, draftId: draftId, request: request)
   }
 
   func runTypingTurn(
     provider: any LLMProvider,
-    chatId: Int64,
+    destination: TelegramDestination,
     request: ChatRequest,
     deadlineSeconds: Int
   ) async throws -> ChatResponse {
@@ -742,7 +747,7 @@ private extension AgentRuntime {
       wallClockDeadlineSeconds: deadlineSeconds,
       clock: clock
     )
-    return try await runtime.run(chatId: chatId, request: request)
+    return try await runtime.run(destination: destination, request: request)
   }
 }
 

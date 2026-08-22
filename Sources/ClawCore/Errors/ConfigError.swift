@@ -1,5 +1,6 @@
 public enum ConfigError: Error, Sendable, Equatable {
   case invalidAllowlist(String)
+  case invalidTelegramGroupChatId(String)
   case unwritableStateRoot(String)
   case missingLLMBaseURL
   case missingLLMModel

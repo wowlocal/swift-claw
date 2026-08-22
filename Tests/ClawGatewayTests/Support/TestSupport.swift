@@ -24,7 +24,22 @@ actor FakeTurnRunner: TurnDispatching {
     let runId: Int64
     let sessionId: Int64
     let chatId: Int64
+    let messageThreadId: Int64?
     let triggerMessageId: Int64
+
+    init(
+      runId: Int64,
+      sessionId: Int64,
+      chatId: Int64,
+      messageThreadId: Int64? = nil,
+      triggerMessageId: Int64
+    ) {
+      self.runId = runId
+      self.sessionId = sessionId
+      self.chatId = chatId
+      self.messageThreadId = messageThreadId
+      self.triggerMessageId = triggerMessageId
+    }
   }
 
   private(set) var calls: [Call] = []
@@ -39,11 +54,40 @@ actor FakeTurnRunner: TurnDispatching {
     chatId: Int64,
     triggerMessageId: Int64
   ) async throws {
+    try await record(
+      runId: runId,
+      sessionId: sessionId,
+      destination: TelegramDestination(chatId: chatId),
+      triggerMessageId: triggerMessageId
+    )
+  }
+
+  func run(
+    runId: Int64,
+    sessionId: Int64,
+    destination: TelegramDestination,
+    triggerMessageId: Int64
+  ) async throws {
+    try await record(
+      runId: runId,
+      sessionId: sessionId,
+      destination: destination,
+      triggerMessageId: triggerMessageId
+    )
+  }
+
+  private func record(
+    runId: Int64,
+    sessionId: Int64,
+    destination: TelegramDestination,
+    triggerMessageId: Int64
+  ) async throws {
     calls.append(
       Call(
         runId: runId,
         sessionId: sessionId,
-        chatId: chatId,
+        chatId: destination.chatId,
+        messageThreadId: destination.messageThreadId,
         triggerMessageId: triggerMessageId
       )
     )

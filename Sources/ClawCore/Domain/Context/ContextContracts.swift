@@ -133,6 +133,7 @@ public struct RecallHit: Sendable, Equatable, Identifiable {
   public let content: String
   public let score: RecallScore
   public let createdAt: Date
+  public let sender: TelegramSender?
 
   public init(
     id: Int64,
@@ -140,7 +141,8 @@ public struct RecallHit: Sendable, Equatable, Identifiable {
     role: MessageRole,
     content: String,
     score: RecallScore,
-    createdAt: Date
+    createdAt: Date,
+    sender: TelegramSender? = nil
   ) {
     self.id = id
     self.sessionId = sessionId
@@ -148,7 +150,13 @@ public struct RecallHit: Sendable, Equatable, Identifiable {
     self.content = content
     self.score = score
     self.createdAt = createdAt
+    self.sender = sender
   }
+}
+
+public enum RecallScope: Sendable, Equatable {
+  case personal
+  case telegramGroup
 }
 
 public struct LabeledContext: Sendable, Equatable {

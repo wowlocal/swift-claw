@@ -13,8 +13,9 @@ public protocol SessionMessageStore: Sendable {
     now: Date
   ) throws(StoreError) -> CommandClaim
   func findSession(sessionKey: String) throws(StoreError) -> Int64?
-  /// Fused transaction: claim the update, upsert the session, insert the user message, create the
-  /// PENDING run, and stamp its trigger message in one write. Duplicates create nothing.
+  /// Fused transaction: claim the update, upsert the session, and insert the user message. When
+  /// requested, creates the PENDING run and stamps its trigger in the same write. Duplicates create
+  /// nothing; archive-only messages never create runs.
   func claimAndPersistInbound(
     _ inbound: InboundMessage
   ) throws(StoreError) -> ClaimResult

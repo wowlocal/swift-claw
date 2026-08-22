@@ -122,6 +122,33 @@ import Testing
     #expect(await provider.requests[0].tools.map(\.name) == ["web_fetch"])
   }
 
+  @Test func groupRunAdvertisesAndExecutesNoToolsEvenIfTheModelProposesOne() async throws {
+    // given
+    let definition = ToolDefinition(
+      name: "web_fetch",
+      description: "d",
+      parameters: .object(["type": .string("object")]),
+      metadataProvenance: .trusted,
+      egressClass: .none,
+      riskLevel: .safe
+    )
+    let provider = SequenceProvider([
+      toolCallResponse([fetchProposal()], content: "trying"),
+      okResponse(content: "I cannot use tools here"),
+    ])
+    let dispatcher = ScriptedDispatcher(definitions: [definition], respond: okOutcome())
+    let runtime = makeRuntime(provider: provider, toolDispatcher: dispatcher)
+
+    // when — an exhausted proactive pool must not classify a member-triggered group turn as proactive
+    let outcome = try await run(runtime, origin: .group, proactiveTodayUSD: 2.0)
+
+    // then
+    #expect(try requireCompleted(outcome.result).content == "I cannot use tools here")
+    #expect(await provider.requests.allSatisfy { $0.tools.isEmpty })
+    #expect(await dispatcher.records.isEmpty)
+    #expect(outcome.exchanges[0].observations[0].content == "No tools are available.")
+  }
+
   @Test func untrustedToolMetadataTaintsBeforeTheFirstDispatch() async throws {
     // given
     let definition = ToolDefinition(

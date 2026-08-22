@@ -72,6 +72,10 @@ public struct RawMessage: Sendable, Equatable {
   public let mediaKind: String?
   public let voice: VoiceAttachment?
   public let photo: PhotoAttachment?
+  public let chatType: TelegramChatType
+  public let messageThreadId: Int64?
+  public let sender: TelegramSender?
+  public let entities: [TelegramMessageEntity]
 
   public init(
     messageId: Int64,
@@ -81,7 +85,11 @@ public struct RawMessage: Sendable, Equatable {
     caption: String?,
     mediaKind: String?,
     voice: VoiceAttachment? = nil,
-    photo: PhotoAttachment? = nil
+    photo: PhotoAttachment? = nil,
+    chatType: TelegramChatType = .privateChat,
+    messageThreadId: Int64? = nil,
+    sender: TelegramSender? = nil,
+    entities: [TelegramMessageEntity] = []
   ) {
     self.messageId = messageId
     self.fromUserId = fromUserId
@@ -91,6 +99,10 @@ public struct RawMessage: Sendable, Equatable {
     self.mediaKind = mediaKind
     self.voice = voice
     self.photo = photo
+    self.chatType = chatType
+    self.messageThreadId = messageThreadId
+    self.sender = sender
+    self.entities = entities
   }
 }
 
@@ -108,6 +120,14 @@ public struct IncomingMessage: Sendable, Equatable {
   public let chatId: Int64
   public let content: Content
   public let isEdited: Bool
+  public let chatType: TelegramChatType
+  public let messageThreadId: Int64?
+  public let sender: TelegramSender
+  public let entities: [TelegramMessageEntity]
+
+  public var destination: TelegramDestination {
+    TelegramDestination(chatId: chatId, messageThreadId: messageThreadId)
+  }
 
   public init(
     updateId: Int64,
@@ -115,7 +135,11 @@ public struct IncomingMessage: Sendable, Equatable {
     userId: Int64,
     chatId: Int64,
     content: Content,
-    isEdited: Bool
+    isEdited: Bool,
+    chatType: TelegramChatType = .privateChat,
+    messageThreadId: Int64? = nil,
+    sender: TelegramSender? = nil,
+    entities: [TelegramMessageEntity] = []
   ) {
     self.updateId = updateId
     self.messageId = messageId
@@ -123,6 +147,10 @@ public struct IncomingMessage: Sendable, Equatable {
     self.chatId = chatId
     self.content = content
     self.isEdited = isEdited
+    self.chatType = chatType
+    self.messageThreadId = messageThreadId
+    self.sender = sender ?? TelegramSender(kind: .user, id: userId)
+    self.entities = entities
   }
 
   /// Pure normalization (no I/O). Returns nil when there's nothing actionable:
@@ -160,7 +188,52 @@ public struct IncomingMessage: Sendable, Equatable {
       userId: fromUserId,
       chatId: message.chatId,
       content: content,
-      isEdited: raw.message == nil && raw.editedMessage != nil
+      isEdited: raw.message == nil && raw.editedMessage != nil,
+      chatType: message.chatType,
+      messageThreadId: message.messageThreadId,
+      sender: message.sender,
+      entities: message.entities
     )
+  }
+}
+
+// MARK: - Bot Addressing
+
+public extension IncomingMessage {
+  var writtenText: String? {
+    switch content {
+    case .text(let text):
+      text
+    case .photo(_, let caption):
+      caption
+    case .voice, .unsupported:
+      nil
+    }
+  }
+
+  /// Exact group addressing. A normal mention must be the entity's complete text; a slash command
+  /// is accepted only when its leading BotCommand token carries this bot's explicit `@username`.
+  func addressesBot(username: String?) -> Bool {
+    guard let username, username.isEmpty == false, let text = writtenText else {
+      return false
+    }
+    let expectedMention = "@\(username)"
+
+    for entity in entities {
+      guard let entityText = entity.text(in: text) else {
+        continue
+      }
+      if entity.type == "mention" {
+        if entityText.caseInsensitiveCompare(expectedMention) == .orderedSame {
+          return true
+        }
+      }
+      if entity.type == "bot_command" {
+        if entityText.lowercased().hasSuffix(expectedMention.lowercased()) {
+          return true
+        }
+      }
+    }
+    return false
   }
 }

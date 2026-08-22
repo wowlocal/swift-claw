@@ -78,10 +78,14 @@ public struct OutboxDispatcher: Service {
       return
     }
 
+    var blockedDestinations: Set<TelegramDestination> = []
     for row in pendingRows {
       // Stop promptly on graceful shutdown: leave the rest PENDING for boot recovery rather
       // than starting new sends while the task is unwinding.
       if Task.isCancelled { break }
+      if blockedDestinations.contains(row.destination) {
+        continue
+      }
 
       let messageId: Int64
       do {
@@ -90,15 +94,13 @@ public struct OutboxDispatcher: Service {
         // A send interrupted by shutdown is not a fault — the row stays PENDING and boot recovery
         // redelivers it; only a genuine failure is worth a warning.
         if Task.isCancelled { break }
-        // Recoverable: leave this row and any later ones PENDING and stop, so a multi-chunk reply
-        // redelivers in order on the next drain rather than racing later chunks ahead of this one.
-        // A row that *permanently* fails to send therefore stalls itself and every later row on
-        // every drain — there is no hot-retry, attempt cap, or dead-letter path yet. Tolerable
-        // here because the only recipient is the owner's own DM.
+        // Preserve order for this exact chat/topic while allowing unrelated destinations to drain.
+        // A permanently failing topic therefore cannot stall the owner's DM or another topic.
         logger.warning(
-          "outbox send failed for run \(row.runId) step \(row.stepIndex); leaving it and later rows for the next drain: \(error)"
+          "outbox send failed for run \(row.runId) step \(row.stepIndex); blocking this destination for the current drain: \(error)"
         )
-        break
+        blockedDestinations.insert(row.destination)
+        continue
       }
 
       do {
@@ -117,6 +119,7 @@ public struct OutboxDispatcher: Service {
         logger.error(
           "outbox delivered run \(row.runId) step \(row.stepIndex) (message \(messageId)) but recording it failed; expect a duplicate: \(error)"
         )
+        blockedDestinations.insert(row.destination)
       }
     }
   }
@@ -131,7 +134,7 @@ public struct OutboxDispatcher: Service {
   private func send(_ row: OutboxRow) async throws -> Int64 {
     do {
       return try await delivery.sendRichMessage(
-        chatId: row.chatId,
+        destination: row.destination,
         markdown: row.payload,
         replyMarkup: row.replyMarkup
       )
@@ -140,7 +143,7 @@ public struct OutboxDispatcher: Service {
         "rich send failed for run \(row.runId) step \(row.stepIndex), falling back to plain: \(error)"
       )
       return try await delivery.sendMessage(
-        chatId: row.chatId,
+        destination: row.destination,
         text: row.payload,
         replyMarkup: row.replyMarkup
       )

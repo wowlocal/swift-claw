@@ -26,6 +26,9 @@ database, encrypted secret envelopes, and Markdown files you edit by hand.
 - **A real Telegram chat.** Answers stream in as live message drafts. `/stop` cancels a
   turn, `/new` starts a fresh session, clawd transcribes voice notes on-device
   (macOS 26), and it looks at photos you send if your model can see them.
+- **One optional shared chat.** Point clawd at one Telegram group or supergroup and every
+  member can mention the bot. It archives the chat it receives, keeps forum topics separate,
+  and replies in the topic that called it — without exposing the owner's memory or tools.
 - **Durable memory.** Facts you confirm persist in SQLite, and clawd recalls them by
   importance and recency. Workspace Markdown files hold your profile, notes, and daily
   logs, and conversation history is full-text searchable.
@@ -96,6 +99,10 @@ sudo install -m755 .build/release/clawd /usr/local/bin/clawd
    `set -a && . ~/.swift-claw/clawd.env && set +a && clawd doctor`, then run the start
    command doctor prints.
 
+To add one shared group later, disable the bot's privacy mode in BotFather and set the
+group's negative ID as `CLAW_TELEGRAM_GROUP_CHAT_ID`; see the
+[setup walkthrough](docs/GETTING_STARTED.md#optional-connect-one-shared-group).
+
 The full walkthrough, including the ChatGPT-subscription route and troubleshooting, is
 in [docs/GETTING_STARTED.md](docs/GETTING_STARTED.md).
 
@@ -103,10 +110,13 @@ in [docs/GETTING_STARTED.md](docs/GETTING_STARTED.md).
 
 swift-claw assumes you are the only person it serves.
 
-- **Default-deny.** Only allowlisted Telegram IDs get a conversation. clawd refuses
+- **Default-deny.** Only allowlisted Telegram IDs get a private conversation. clawd refuses
   everyone else, and answers `/start` with the sender's own numeric ID so you can
   allowlist them. `CLAW_ALLOWLIST` only ever adds, so revoking an ID means deleting its
   row from the database ([details](docs/CUSTOMIZATION.md#everything-else)).
+- **Shared chat is a separate boundary.** If `CLAW_TELEGRAM_GROUP_CHAT_ID` is set, members
+  of that one exact chat may trigger replies only by mentioning the bot. Group turns receive
+  no owner workspace, durable personal memory, skills, schedules, approvals, or tools.
 - **Secrets encrypted at rest.** `clawd secrets seal` wraps the bot token and API keys in
   an AES-GCM envelope. Plaintext env secrets remain available as a dev fallback that
   warns on every boot.

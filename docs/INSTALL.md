@@ -75,6 +75,11 @@ mkdir -p -m 700 ~/.swift-claw
 install -m 600 clawd.env.example ~/.swift-claw/clawd.env
 ```
 
+The template includes the optional `CLAW_TELEGRAM_GROUP_CHAT_ID`. Enabling it also requires
+disabling the bot's privacy mode in BotFather; follow the
+[shared-group setup](GETTING_STARTED.md#optional-connect-one-shared-group) before starting the
+service so Telegram delivers the history clawd is expected to archive.
+
 Or build from source with a Swift 6.3 toolchain. On Linux, install the SQLite headers
 first (`sudo apt-get install -y libsqlite3-dev`); the runtime package alone will not link:
 

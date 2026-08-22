@@ -16,26 +16,72 @@ public struct RetrieverGRDB: Retriever {
     excludedMessageIds: [Int64],
     limit: Int
   ) throws(StoreError) -> [RecallHit] {
+    try searchRelevantMessages(
+      query: query,
+      currentSessionId: currentSessionId,
+      windowStartMessageId: windowStartMessageId,
+      excludedMessageIds: excludedMessageIds,
+      scope: .personal,
+      limit: limit
+    )
+  }
+
+  public func searchRelevantMessages(
+    query: String,
+    currentSessionId: Int64,
+    windowStartMessageId: Int64?,
+    excludedMessageIds: [Int64],
+    scope: RecallScope,
+    limit: Int
+  ) throws(StoreError) -> [RecallHit] {
     // A tokenless query (empty/punctuation) yields nil -> zero results; never raw-interpolate text.
     guard let pattern = FTS5Pattern(matchingAnyTokenIn: query) else {
       return []
     }
 
     return try database.readMapping { db in
+      let groupChatId: Int64?
+      if scope == .telegramGroup {
+        groupChatId = try Int64.fetchOne(
+          db,
+          sql: """
+            SELECT telegram_chat_id FROM sessions
+            WHERE id = ? AND conversation_kind = ?
+            """,
+          arguments: [currentSessionId, ConversationKind.group.rawValue]
+        )
+        guard groupChatId != nil else {
+          return []
+        }
+      } else {
+        groupChatId = nil
+      }
+
       // messages_fts.rowid == messages.id (external content). BM25 is negative; lower = better, so
       // ORDER BY is ASC. RecallScore negates it back so higher = better for policy/telemetry.
-      // Trusted rows only: an untrusted user row (a voice transcript) is attacker-influenceable
-      // content — resurfacing it into a later or detainted session would re-ingest it without
-      // re-arming session taint, leaving the trifecta gate unarmed (ARCHITECTURE.md §12).
+      // Personal recall stays trusted-only so attacker-influenceable text cannot resurface after a
+      // detaint. Group recall intentionally includes untrusted rows, but only from the same numeric
+      // chat boundary; context assembly fences them again and group turns have no tools.
       var sql = """
-        SELECT m.id, m.session_id, m.role, m.content, m.ts, bm25(messages_fts) AS bm25_score
+        SELECT m.id, m.session_id, m.role, m.content, m.ts, m.sender_kind, m.sender_id,
+          m.sender_display_name, m.sender_username, m.sender_is_bot,
+          bm25(messages_fts) AS bm25_score
         FROM messages m
         JOIN messages_fts ON messages_fts.rowid = m.id
+        JOIN sessions s ON s.id = m.session_id
         WHERE messages_fts MATCH ?
           AND m.role IN ('\(MessageRole.user.rawValue)', '\(MessageRole.assistant.rawValue)')
-          AND m.provenance = '\(Provenance.trusted.rawValue)'
         """
       var arguments: StatementArguments = [pattern]
+
+      switch scope {
+      case .personal:
+        sql += "\n  AND m.provenance = ? AND s.conversation_kind != ?"
+        arguments += [Provenance.trusted.rawValue, ConversationKind.group.rawValue]
+      case .telegramGroup:
+        sql += "\n  AND s.conversation_kind = ? AND s.telegram_chat_id = ?"
+        arguments += [ConversationKind.group.rawValue, groupChatId]
+      }
 
       if let windowStart = windowStartMessageId {
         // Dedup against the current session's in-window range.
@@ -65,7 +111,8 @@ public struct RetrieverGRDB: Retriever {
           role: role,
           content: row["content"],
           score: RecallScore(sqliteBM25: row["bm25_score"]),
-          createdAt: row["ts"]
+          createdAt: row["ts"],
+          sender: TelegramSenderCoding.decode(row)
         )
       }
     }

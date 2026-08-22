@@ -20,6 +20,7 @@ public enum HandleOutcome: Sendable, Equatable {
 /// `handle` is the single place the outcome returns to the poller.
 public struct MessageRouter: Sendable {
   private let botUsername: String?
+  private let groupChatId: Int64?
 
   private let accessControl: AccessControl
   private let replies: ReplySender
@@ -44,6 +45,7 @@ public struct MessageRouter: Sendable {
     memoryCommands: any MemoryCommandStore,
     pendingConfirmations: PendingConfirmationRegistry,
     botUsername: String?,
+    groupChatId: Int64? = nil,
     accessControl: AccessControl,
     delivery: any MessageDelivery,
     turnRunner: any TurnDispatching,
@@ -60,6 +62,7 @@ public struct MessageRouter: Sendable {
     logger: Logger
   ) {
     self.botUsername = botUsername
+    self.groupChatId = groupChatId
 
     self.accessControl = accessControl
     self.approvalCallbacks = approvalCallbacks
@@ -151,6 +154,13 @@ private extension MessageRouter {
       return .skipped
     }
 
+    if message.chatType.isGroup {
+      return try await routeGroup(rawUpdate: rawUpdate, message: message)
+    }
+    if message.chatType == .channel {
+      return .skipped
+    }
+
     let isAllowed = accessControl.isAllowed(userId: message.userId)
 
     switch message.content {
@@ -184,6 +194,62 @@ private extension MessageRouter {
       }
       return await denyAccess(command, rawUpdate: rawUpdate, message: message)
     }
+  }
+
+  /// The configured shared chat is a separate, untrusted surface: every readable message is
+  /// archived, while only an exact Bot API mention entity starts a turn. Group text never enters
+  /// the owner's command or confirmation paths.
+  func routeGroup(
+    rawUpdate: RawUpdate,
+    message: IncomingMessage
+  ) async throws(RoutingHalt) -> HandleOutcome {
+    guard let groupChatId else {
+      logger.notice(
+        "Telegram group \(message.chatId) is not configured; set CLAW_TELEGRAM_GROUP_CHAT_ID to enable it"
+      )
+      return .skipped
+    }
+    guard groupChatId == message.chatId else {
+      return .skipped
+    }
+    guard let text = groupHistoryText(rawUpdate) else {
+      return .skipped
+    }
+
+    let startsTurn = message.sender.isBot == false && message.addressesBot(username: botUsername)
+    if startsTurn {
+      return try await turnDispatch.dispatch(
+        rawUpdate: rawUpdate,
+        message: message,
+        text: text,
+        provenance: .untrusted,
+        disposition: .startRun(origin: .group)
+      )
+    }
+    return try await turnDispatch.archive(rawUpdate: rawUpdate, message: message, text: text)
+  }
+
+  func groupHistoryText(_ rawUpdate: RawUpdate) -> String? {
+    guard let message = rawUpdate.message ?? rawUpdate.editedMessage else {
+      return nil
+    }
+
+    let written = (message.text ?? message.caption).flatMap { text in
+      text.isEmpty ? nil : text
+    }
+    let marker: String?
+    if message.photo != nil || message.mediaKind == PhotoAttachment.mediaKindDescription {
+      marker = "[Telegram photo]"
+    } else if message.voice != nil || message.mediaKind == VoiceAttachment.mediaKindDescription {
+      marker = "[Telegram voice message]"
+    } else if let mediaKind = message.mediaKind {
+      marker = "[Unsupported Telegram media: \(mediaKind)]"
+    } else {
+      marker = nil
+    }
+
+    let parts = [marker, written].compactMap { $0 }
+    return parts.isEmpty ? nil : parts.joined(separator: "\n")
   }
 
   func routeVoice(

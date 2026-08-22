@@ -11,12 +11,32 @@ public protocol TurnDispatching: Sendable {
     chatId: Int64,
     triggerMessageId: Int64
   ) async throws
+  func run(
+    runId: Int64,
+    sessionId: Int64,
+    destination: TelegramDestination,
+    triggerMessageId: Int64
+  ) async throws
   /// Continues a run the approval waiter already flipped AWAITING_APPROVAL → RUNNING: no pick-up,
   /// context bound to the filled observation row, budget counters carried over.
   func resume(runId: Int64, sessionId: Int64, chatId: Int64, contextBoundMessageId: Int64) async
 }
 
 extension TurnDispatching {
+  public func run(
+    runId: Int64,
+    sessionId: Int64,
+    destination: TelegramDestination,
+    triggerMessageId: Int64
+  ) async throws {
+    try await run(
+      runId: runId,
+      sessionId: sessionId,
+      chatId: destination.chatId,
+      triggerMessageId: triggerMessageId
+    )
+  }
+
   public func resume(
     runId: Int64,
     sessionId: Int64,
@@ -106,6 +126,20 @@ public struct TurnRunner: TurnDispatching {
     chatId: Int64,
     triggerMessageId: Int64
   ) async throws {
+    try await run(
+      runId: runId,
+      sessionId: sessionId,
+      destination: TelegramDestination(chatId: chatId),
+      triggerMessageId: triggerMessageId
+    )
+  }
+
+  public func run(
+    runId: Int64,
+    sessionId: Int64,
+    destination: TelegramDestination,
+    triggerMessageId: Int64
+  ) async throws {
     guard !Task.isCancelled else {
       return
     }
@@ -140,7 +174,7 @@ public struct TurnRunner: TurnDispatching {
       try commitContextUnavailable(
         runId: runId,
         sessionId: sessionId,
-        chatId: chatId,
+        destination: destination,
         setTainted: false,
         at: Date()
       )
@@ -152,7 +186,8 @@ public struct TurnRunner: TurnDispatching {
     let outcome = try await agent.runTurn(
       runId: runId,
       sessionId: sessionId,
-      chatId: chatId,
+      chatId: destination.chatId,
+      messageThreadId: destination.messageThreadId,
       buildResult: inputs.buildResult,
       sessionTainted: inputs.snapshot.isTainted,
       sessionHasPrivateData: inputs.snapshot.hasPrivateData,
@@ -166,7 +201,7 @@ public struct TurnRunner: TurnDispatching {
       outcome,
       runId: runId,
       sessionId: sessionId,
-      chatId: chatId,
+      destination: destination,
       ownerNotices: inputs.buildResult.ownerNotices,
       origin: origin
     )
@@ -274,7 +309,7 @@ private extension TurnRunner {
     // The proactive pool is one aggregate over scheduled + heartbeat; interactive runs never
     // pay for the extra query.
     let proactiveTodayUSD: Double
-    if origin == .interactive {
+    if origin.isProactive == false {
       proactiveTodayUSD = 0
     } else {
       proactiveTodayUSD =
@@ -323,10 +358,28 @@ extension TurnRunner {
     ownerNotices: [String],
     origin: RunOrigin
   ) async throws {
+    try await commit(
+      outcome,
+      runId: runId,
+      sessionId: sessionId,
+      destination: TelegramDestination(chatId: chatId),
+      ownerNotices: ownerNotices,
+      origin: origin
+    )
+  }
+
+  func commit(  // swiftlint:disable:this function_parameter_count
+    _ outcome: TurnOutcome,
+    runId: Int64,
+    sessionId: Int64,
+    destination: TelegramDestination,
+    ownerNotices: [String],
+    origin: RunOrigin
+  ) async throws {
     let context = CommitContext(
       runId: runId,
       sessionId: sessionId,
-      chatId: chatId,
+      destination: destination,
       ownerNotices: ownerNotices,
       origin: origin,
       committedAt: Date()
@@ -372,7 +425,7 @@ private extension TurnRunner {
           ownerNotices: context.ownerNotices,
           appendedNotices: appendedNotices
         ),
-        chatId: context.chatId
+        destination: context.destination
       )
     let turn = AssistantTurn(
       runId: context.runId,
@@ -391,17 +444,21 @@ private extension TurnRunner {
     case .committed:
       try auditCompleted(content: content, suppressedAck: suppressHeartbeatAck, in: context)
       notifyOutbox()
-      await notifyDailyCapIfTripped(
-        chatId: context.chatId,
-        runId: context.runId,
-        sessionId: context.sessionId
-      )
+      if context.origin.isGroup == false {
+        await notifyDailyCapIfTripped(
+          chatId: context.chatId,
+          runId: context.runId,
+          sessionId: context.sessionId
+        )
+      }
     case .usageRecordedAfterTerminal:
-      await notifyDailyCapIfTripped(
-        chatId: context.chatId,
-        runId: context.runId,
-        sessionId: context.sessionId
-      )
+      if context.origin.isGroup == false {
+        await notifyDailyCapIfTripped(
+          chatId: context.chatId,
+          runId: context.runId,
+          sessionId: context.sessionId
+        )
+      }
     case .ignored:
       return
     }
@@ -452,7 +509,7 @@ private extension TurnRunner {
     let commitResult = try commitDegradation(
       runId: context.runId,
       sessionId: context.sessionId,
-      chatId: context.chatId,
+      destination: context.destination,
       usage: usage,
       exchanges: outcome.exchanges,
       setTainted: outcome.ingestedUntrusted,
@@ -466,7 +523,7 @@ private extension TurnRunner {
       decision: kind.auditDecision,
       at: context.committedAt
     )
-    if commitResult != .ignored {
+    if commitResult != .ignored, context.origin.isGroup == false {
       await notifyDailyCapIfTripped(
         chatId: context.chatId,
         runId: context.runId,
@@ -486,7 +543,7 @@ private extension TurnRunner {
     _ = try commitDegradation(
       runId: context.runId,
       sessionId: context.sessionId,
-      chatId: context.chatId,
+      destination: context.destination,
       usage: nil,
       exchanges: outcome.exchanges,
       setTainted: outcome.ingestedUntrusted,
@@ -500,7 +557,7 @@ private extension TurnRunner {
       decision: cap,
       at: context.committedAt
     )
-    if context.origin != .interactive, cap == BudgetGate.proactivePerDayCap {
+    if context.origin.isProactive, cap == BudgetGate.proactivePerDayCap {
       await notifyProactiveCapIfTripped(
         chatId: context.chatId,
         runId: context.runId,
@@ -514,7 +571,7 @@ private extension TurnRunner {
   func commitDegradation(  // swiftlint:disable:this function_parameter_count
     runId: Int64,
     sessionId: Int64,
-    chatId: Int64,
+    destination: TelegramDestination,
     usage: ProviderUsage?,
     exchanges: [ToolExchange],
     setTainted: Bool,
@@ -526,7 +583,8 @@ private extension TurnRunner {
   ) throws -> RunCommitResult {
     let chunk = OutboxChunk(
       stepIndex: 0,
-      chatId: chatId,
+      chatId: destination.chatId,
+      messageThreadId: destination.messageThreadId,
       payload: message,
       payloadHash: ContentHash.fnv1a(message)
     )
@@ -535,7 +593,7 @@ private extension TurnRunner {
       DegradedTurn(
         runId: runId,
         sessionId: sessionId,
-        chatId: chatId,
+        chatId: destination.chatId,
         usage: usage,
         chunk: chunk,
         exchanges: exchanges,
@@ -567,14 +625,14 @@ private extension TurnRunner {
   func commitContextUnavailable(
     runId: Int64,
     sessionId: Int64,
-    chatId: Int64,
+    destination: TelegramDestination,
     setTainted: Bool,
     at committedAt: Date
   ) throws {
     _ = try commitDegradation(
       runId: runId,
       sessionId: sessionId,
-      chatId: chatId,
+      destination: destination,
       usage: nil,
       exchanges: [],
       setTainted: setTainted,
@@ -583,6 +641,22 @@ private extension TurnRunner {
       message: ownerVisiblePayload(reply: Degradation.contextUnavailable, ownerNotices: []),
       action: .turnDegraded,
       decision: DegradationKind.contextUnavailable.auditDecision,
+      at: committedAt
+    )
+  }
+
+  func commitContextUnavailable(
+    runId: Int64,
+    sessionId: Int64,
+    chatId: Int64,
+    setTainted: Bool,
+    at committedAt: Date
+  ) throws {
+    try commitContextUnavailable(
+      runId: runId,
+      sessionId: sessionId,
+      destination: TelegramDestination(chatId: chatId),
+      setTainted: setTainted,
       at: committedAt
     )
   }
@@ -611,7 +685,7 @@ private extension TurnRunner {
       try commitContextUnavailable(
         runId: context.runId,
         sessionId: context.sessionId,
-        chatId: context.chatId,
+        destination: context.destination,
         setTainted: outcome.ingestedUntrusted,
         at: context.committedAt
       )

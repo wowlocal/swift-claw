@@ -48,7 +48,7 @@ public struct OutboxStoreGRDB: OutboxStore {
       try Row.fetchAll(
         db,
         sql: """
-          SELECT run_id, step_index, chat_id, payload, approval_id, reply_markup
+          SELECT run_id, step_index, chat_id, message_thread_id, payload, approval_id, reply_markup
           FROM outbound_deliveries
           WHERE status = 'PENDING' ORDER BY run_id, step_index
           """
@@ -57,6 +57,7 @@ public struct OutboxStoreGRDB: OutboxStore {
           runId: row["run_id"],
           stepIndex: row["step_index"],
           chatId: row["chat_id"],
+          messageThreadId: row["message_thread_id"],
           payload: row["payload"],
           approvalId: row["approval_id"],
           replyMarkup: row["reply_markup"]

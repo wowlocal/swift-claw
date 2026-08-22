@@ -80,6 +80,33 @@ import Testing
     #expect(config.allowlist.isEmpty)
   }
 
+  @Test func sharedTelegramGroupIdIsOptionalAndParsesSignedSupergroupIds() throws {
+    // given
+    let omitted = envWithLLM([EnvKey.stateRoot: NSTemporaryDirectory()])
+    var enabled = omitted
+    enabled[EnvKey.telegramGroupChatId] = " -1001234 "
+
+    // when
+    let omittedConfig = try AppConfig.load(environment: omitted)
+    let enabledConfig = try AppConfig.load(environment: enabled)
+
+    // then
+    #expect(omittedConfig.telegramGroupChatId == nil)
+    #expect(enabledConfig.telegramGroupChatId == -1_001_234)
+  }
+
+  @Test(arguments: ["42", "0", "not-a-chat"])
+  func sharedTelegramGroupIdRejectsNonGroupShapes(value: String) {
+    // given
+    var env = envWithLLM([EnvKey.stateRoot: NSTemporaryDirectory()])
+    env[EnvKey.telegramGroupChatId] = value
+
+    // when / then
+    #expect(throws: ConfigError.invalidTelegramGroupChatId(value)) {
+      try AppConfig.load(environment: env)
+    }
+  }
+
   @Test func defaultsPollTimeoutTo30() throws {
     // given
     let env = envWithLLM([EnvKey.stateRoot: NSTemporaryDirectory()])

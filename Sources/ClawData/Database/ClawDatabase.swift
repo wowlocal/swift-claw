@@ -252,6 +252,9 @@ public enum ClawDatabase {
       try rebuildMessagesWithProviderState(db)
       try rebuildProviderUsageWithCallIdentity(db)
     }
+    migrator.registerMigration("v10") { db in
+      try addSharedTelegramChatColumns(db)
+    }
     return migrator
   }
 

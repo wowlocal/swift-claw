@@ -41,4 +41,31 @@ public protocol Retriever: Sendable {
     excludedMessageIds: [Int64],
     limit: Int
   ) throws(StoreError) -> [RecallHit]
+  func searchRelevantMessages(
+    query: String,
+    currentSessionId: Int64,
+    windowStartMessageId: Int64?,
+    excludedMessageIds: [Int64],
+    scope: RecallScope,
+    limit: Int
+  ) throws(StoreError) -> [RecallHit]
+}
+
+public extension Retriever {
+  func searchRelevantMessages(
+    query: String,
+    currentSessionId: Int64,
+    windowStartMessageId: Int64?,
+    excludedMessageIds: [Int64],
+    scope: RecallScope,
+    limit: Int
+  ) throws(StoreError) -> [RecallHit] {
+    try searchRelevantMessages(
+      query: query,
+      currentSessionId: currentSessionId,
+      windowStartMessageId: windowStartMessageId,
+      excludedMessageIds: excludedMessageIds,
+      limit: limit
+    )
+  }
 }

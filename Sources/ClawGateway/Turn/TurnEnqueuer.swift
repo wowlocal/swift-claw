@@ -16,7 +16,7 @@ struct TurnEnqueuer: Sendable {
   func enqueue(
     runId: Int64,
     sessionId: Int64,
-    chatId: Int64,
+    destination: TelegramDestination,
     triggerMessageId: Int64,
     log: Logger? = nil
   ) async {
@@ -28,7 +28,7 @@ struct TurnEnqueuer: Sendable {
         try await runner.run(
           runId: runId,
           sessionId: sessionId,
-          chatId: chatId,
+          destination: destination,
           triggerMessageId: triggerMessageId
         )
       } catch StoreError.diskFull {
@@ -43,6 +43,22 @@ struct TurnEnqueuer: Sendable {
       // boot reconciler to recover on the next start rather than executing under a draining daemon.
       runLog.notice("run \(runId) not enqueued; lane admission is shutting down")
     }
+  }
+
+  func enqueue(
+    runId: Int64,
+    sessionId: Int64,
+    chatId: Int64,
+    triggerMessageId: Int64,
+    log: Logger? = nil
+  ) async {
+    await enqueue(
+      runId: runId,
+      sessionId: sessionId,
+      destination: TelegramDestination(chatId: chatId),
+      triggerMessageId: triggerMessageId,
+      log: log
+    )
   }
 
   /// A claimed scheduler/run-now fire is a first-class lane citizen — ordered and cancellable

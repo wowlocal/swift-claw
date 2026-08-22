@@ -3,6 +3,7 @@ import Foundation
 public struct AppConfig: Sendable, Equatable {
   public enum EnvKey {
     static let allowlist = "CLAW_ALLOWLIST"
+    public static let telegramGroupChatId = "CLAW_TELEGRAM_GROUP_CHAT_ID"
     /// Public because the auth commands resolve the same state root without loading this config.
     /// The daemon and `clawd auth` have to read the one variable, or they diverge on where an
     /// owner's credentials live.
@@ -90,6 +91,7 @@ public struct AppConfig: Sendable, Equatable {
   }
 
   public let allowlist: Set<Int64>
+  public let telegramGroupChatId: Int64?
   public let stateRoot: URL
   public let pollTimeoutSeconds: Int
 
@@ -123,6 +125,7 @@ public struct AppConfig: Sendable, Equatable {
 
   public init(
     allowlist: Set<Int64>,
+    telegramGroupChatId: Int64? = nil,
     stateRoot: URL,
     pollTimeoutSeconds: Int,
     llm: LLMConfig,
@@ -143,6 +146,7 @@ public struct AppConfig: Sendable, Equatable {
     mcpConfigSource: MCPConfigSource
   ) {
     self.allowlist = allowlist
+    self.telegramGroupChatId = telegramGroupChatId
     self.stateRoot = stateRoot
     self.pollTimeoutSeconds = pollTimeoutSeconds
 
@@ -172,6 +176,7 @@ public struct AppConfig: Sendable, Equatable {
   /// allowlist is allowed so onboarding can still boot.
   public static func load(environment env: [String: String]) throws -> AppConfig {
     let allowlist = try parseAllowlist(from: env[EnvKey.allowlist])
+    let telegramGroupChatId = try parseTelegramGroupChatId(env[EnvKey.telegramGroupChatId])
     let stateRoot = try StateRootResolver.createStateRoot(for: env[EnvKey.stateRoot])
     let pollTimeoutSeconds =
       env[EnvKey.pollTimeout].flatMap(Int.init) ?? EnvDefaults.pollTimeoutSeconds
@@ -206,6 +211,7 @@ public struct AppConfig: Sendable, Equatable {
 
     return AppConfig(
       allowlist: allowlist,
+      telegramGroupChatId: telegramGroupChatId,
       stateRoot: stateRoot,
       pollTimeoutSeconds: pollTimeoutSeconds,
       llm: llm,
@@ -641,6 +647,17 @@ private extension AppConfig {
     }
 
     return allowlist
+  }
+
+  static func parseTelegramGroupChatId(_ raw: String?) throws -> Int64? {
+    let trimmed = raw?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    guard trimmed.isEmpty == false else {
+      return nil
+    }
+    guard let chatId = Int64(trimmed), chatId < 0 else {
+      throw ConfigError.invalidTelegramGroupChatId(trimmed)
+    }
+    return chatId
   }
 }
 

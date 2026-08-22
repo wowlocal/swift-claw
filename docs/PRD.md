@@ -36,7 +36,9 @@ Why Swift: one self-contained binary per platform with no runtime to install und
 - **G8.** Portable: macOS-primary, but the same source builds and runs on Linux.
 
 ### 3.2 Non-goals (v1)
-- **NG1.** Multi-user / multi-tenant operation, groups, or supergroups. *(Single-owner only; the access model leaves room to add it later.)*
+- **NG1.** Multi-tenant operation or more than one configured shared Telegram chat. A deployment
+  still has one owner, but may opt one numeric group/supergroup id into the bounded shared-chat
+  surface described below.
 - **NG2.** Channels other than Telegram (no Slack/Discord/iMessage/WhatsApp). The channel layer stays abstractable, but only Telegram is implemented.
 - **NG3.** Speech *synthesis* (TTS) and an A2UI canvas or companion device "nodes." Inbound voice notes **are** transcribed, on-device, on macOS 26 (see FR-G6); on Linux and older macOS the feature is inert and they get the canned refusal.
 - **NG4.** A web UI / REST API surface (OpenAI-compatible `/v1` server, ACP server) — possible later, not v1. (Note: `status`/`doctor` and Telegram `/status` are **not** this; they are a CLI subcommand and a chat command, see FR-O2.)
@@ -51,7 +53,8 @@ Why Swift: one self-contained binary per platform with no runtime to install und
 
 - **Who:** the author (a single technical owner), self-hosting.
 - **Where:** primary deployment is the owner's Mac (Apple Silicon, macOS 26); secondary is any Linux box with a Swift toolchain (VPS / home server).
-- **How accessed:** a private Telegram bot, DMs only.
+- **How accessed:** a private Telegram bot in owner DMs and, when explicitly configured, one
+  group/supergroup whose participants address it by exact `@username` mention.
 - **Trust:** the *owner* is trusted; everything arriving over the wire (messages, web pages, tool output, attachments) is **untrusted data**, never instructions.
 
 ## 5. Use cases (capabilities)
@@ -65,6 +68,20 @@ All capability areas are in scope over time; the v1 cut and later phasing are in
 - Two quick messages produce two **in-order, non-interleaved** replies (strict per-session ordering — a plain message queues; only `/stop` cancels the current turn and `/new` resets). See FR-R4.
 - Long answers are split safely (no broken code fences) and fall back to plain text if formatting fails.
 - On provider failure/outage or a hit budget cap, the owner gets a **plain-language message**, never silence or a raw error (see FR-R5).
+
+### 5.1.1 Shared Telegram chat *(optional)*
+- The owner may configure one numeric group or supergroup id. Every text message and caption the
+  bot receives there is archived, while only a message carrying an exact Telegram mention of the
+  bot starts an LLM turn.
+- A forum topic is its own ordered conversation lane. The answer is delivered to the same topic;
+  other topics may run concurrently.
+- Recent context comes from the current topic. FTS recall may retrieve older messages from any
+  topic in the configured chat, but never from an owner DM or another chat.
+- Group content is always untrusted. Group turns receive no owner memory, workspace files, skills,
+  schedules, MCP, or executable/write/read tools. Telegram control commands and approvals remain
+  owner-DM surfaces.
+- “Full history” means every supported update received and durably committed after the feature was
+  enabled. Telegram Bot API does not backfill messages from before the bot could receive them.
 
 ### 5.2 Notes & long-term memory *(v1)*
 - *"Remember that my timezone is Europe/Berlin"* → durable fact, recalled in future sessions.

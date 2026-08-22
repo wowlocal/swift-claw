@@ -53,8 +53,21 @@ public struct TelegramClient: TelegramTransport {
   }
 
   public func sendMessage(chatId: Int64, text: String, replyMarkup: String?) async throws -> Int64 {
+    try await sendMessage(
+      destination: TelegramDestination(chatId: chatId),
+      text: text,
+      replyMarkup: replyMarkup
+    )
+  }
+
+  public func sendMessage(
+    destination: TelegramDestination,
+    text: String,
+    replyMarkup: String?
+  ) async throws -> Int64 {
     let request = SendMessageRequest(
-      chatId: chatId,
+      chatId: destination.chatId,
+      messageThreadId: destination.messageThreadId,
       text: text,
       linkPreviewOptions: LinkPreviewOptions(isDisabled: true),
       replyMarkup: replyMarkup.flatMap(JSONValue.parse)
@@ -72,8 +85,21 @@ public struct TelegramClient: TelegramTransport {
     markdown: String,
     replyMarkup: String?
   ) async throws -> Int64 {
+    try await sendRichMessage(
+      destination: TelegramDestination(chatId: chatId),
+      markdown: markdown,
+      replyMarkup: replyMarkup
+    )
+  }
+
+  public func sendRichMessage(
+    destination: TelegramDestination,
+    markdown: String,
+    replyMarkup: String?
+  ) async throws -> Int64 {
     let request = SendRichMessageRequest(
-      chatId: chatId,
+      chatId: destination.chatId,
+      messageThreadId: destination.messageThreadId,
       richMessage: InputRichMessage(markdown: markdown),
       linkPreviewOptions: LinkPreviewOptions(isDisabled: true),
       replyMarkup: replyMarkup.flatMap(JSONValue.parse)
@@ -117,8 +143,21 @@ public struct TelegramClient: TelegramTransport {
     draftId: Int64,
     markdown: String
   ) async throws -> Bool {
+    try await sendRichMessageDraft(
+      destination: TelegramDestination(chatId: chatId),
+      draftId: draftId,
+      markdown: markdown
+    )
+  }
+
+  public func sendRichMessageDraft(
+    destination: TelegramDestination,
+    draftId: Int64,
+    markdown: String
+  ) async throws -> Bool {
     let request = SendRichMessageDraftRequest(
-      chatId: chatId,
+      chatId: destination.chatId,
+      messageThreadId: destination.messageThreadId,
       draftId: draftId,
       richMessage: InputRichMessage(markdown: markdown),
       linkPreviewOptions: LinkPreviewOptions(isDisabled: true)
@@ -131,7 +170,15 @@ public struct TelegramClient: TelegramTransport {
   }
 
   public func sendChatAction(chatId: Int64, action: String) async throws {
-    let request = SendChatActionRequest(chatId: chatId, action: action)
+    try await sendChatAction(destination: TelegramDestination(chatId: chatId), action: action)
+  }
+
+  public func sendChatAction(destination: TelegramDestination, action: String) async throws {
+    let request = SendChatActionRequest(
+      chatId: destination.chatId,
+      messageThreadId: destination.messageThreadId,
+      action: action
+    )
     let _: Bool = try await callMethod(
       "sendChatAction",
       body: request,
@@ -292,6 +339,7 @@ private struct GetFileRequest: Encodable {
 
 private struct SendMessageRequest: Encodable {
   let chatId: Int64
+  let messageThreadId: Int64?
   let text: String
   let linkPreviewOptions: LinkPreviewOptions
   let replyMarkup: JSONValue?
@@ -299,6 +347,7 @@ private struct SendMessageRequest: Encodable {
 
 private struct SendRichMessageRequest: Encodable {
   let chatId: Int64
+  let messageThreadId: Int64?
   let richMessage: InputRichMessage
   let linkPreviewOptions: LinkPreviewOptions
   let replyMarkup: JSONValue?
@@ -306,6 +355,7 @@ private struct SendRichMessageRequest: Encodable {
 
 private struct SendChatActionRequest: Encodable {
   let chatId: Int64
+  let messageThreadId: Int64?
   let action: String
 }
 
@@ -335,5 +385,9 @@ public struct TelegramTypingIndicator: TypingIndicator {
 
   public func sendTyping(chatId: Int64) async {
     try? await transport.sendChatAction(chatId: chatId, action: "typing")
+  }
+
+  public func sendTyping(destination: TelegramDestination) async {
+    try? await transport.sendChatAction(destination: destination, action: "typing")
   }
 }

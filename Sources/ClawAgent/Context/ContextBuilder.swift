@@ -20,6 +20,7 @@ public struct ContextBuilder: Sendable {
 
   private let systemPrompt: String
   private let proactiveSystemPrompt: String
+  private let groupSystemPrompt: String
 
   private let workspace: any WorkspaceReading
   private let memoryStore: any MemoryStore
@@ -35,6 +36,7 @@ public struct ContextBuilder: Sendable {
   public init(
     systemPrompt: String,
     proactiveSystemPrompt: String = SystemPrompt.proactive,
+    groupSystemPrompt: String = SystemPrompt.group,
     workspace: any WorkspaceReading,
     memoryStore: any MemoryStore,
     retriever: any Retriever,
@@ -46,6 +48,7 @@ public struct ContextBuilder: Sendable {
   ) {
     self.systemPrompt = systemPrompt
     self.proactiveSystemPrompt = proactiveSystemPrompt
+    self.groupSystemPrompt = groupSystemPrompt
 
     self.workspace = workspace
     self.memoryStore = memoryStore
@@ -83,7 +86,7 @@ public struct ContextBuilder: Sendable {
     if let notice = droppedSkillsNotice(fitted: fitted, requested: truncatableSections) {
       ownerNotices.append(notice)
     }
-    let messages = renderMessages(fitted: fitted, snapshot: snapshot)
+    let messages = renderMessages(fitted: fitted, snapshot: snapshot, origin: origin)
 
     return BuildResult(
       messages: messages,
@@ -101,7 +104,32 @@ private extension ContextBuilder {
     origin: RunOrigin,
     ownerNotices: inout [String]
   ) -> [FittableSection] {
-    [
+    if origin.isGroup {
+      return [
+        section(
+          id: .policy,
+          units: [
+            SectionUnit(
+              id: "policy",
+              content: groupSystemPrompt,
+              canTruncate: false
+            )
+          ]
+        ),
+        section(
+          id: .metadata,
+          units: [
+            SectionUnit(
+              id: "metadata-time",
+              content: "Current time: \(Self.iso8601(now()))",
+              canTruncate: false
+            )
+          ]
+        ),
+      ]
+    }
+
+    return [
       section(
         id: .policy,
         units: [
@@ -156,15 +184,32 @@ private extension ContextBuilder {
     residual: Int,
     ownerNotices: inout [String]
   ) -> [FittableSection] {
-    [
+    if origin.isGroup {
+      return [
+        historySection(snapshot: snapshot, residual: residual, includeSenders: true),
+        recallSection(
+          snapshot: snapshot,
+          sessionId: sessionId,
+          residual: residual,
+          scope: .telegramGroup
+        ),
+      ].compactMap { $0 }
+    }
+
+    return [
       memoryItemsSection(snapshot: snapshot, residual: residual),
-      historySection(snapshot: snapshot, residual: residual),
+      historySection(snapshot: snapshot, residual: residual, includeSenders: false),
       // Proactive runs never recall: the retriever's dedup excludes only the CURRENT window,
       // so after a per-fire window reset a recall search would resurface exactly the prior-fire
       // turns (and the owner's DM chat about arming the job) that the reset fenced off.
       origin.isProactive
         ? nil
-        : recallSection(snapshot: snapshot, sessionId: sessionId, residual: residual),
+        : recallSection(
+          snapshot: snapshot,
+          sessionId: sessionId,
+          residual: residual,
+          scope: .personal
+        ),
       skillsSection(residual: residual, ownerNotices: &ownerNotices),
     ].compactMap { $0 }
   }
@@ -250,7 +295,11 @@ private extension ContextBuilder {
     return section(id: .memoryItems, cap: cap, units: units)
   }
 
-  func historySection(snapshot: SessionContextSnapshot, residual: Int) -> FittableSection? {
+  func historySection(
+    snapshot: SessionContextSnapshot,
+    residual: Int,
+    includeSenders: Bool
+  ) -> FittableSection? {
     // No `cap > 0` early-return: even when fixed sections leave a zero residual, the newest
     // history unit (the current turn) must reach the fitter, which keeps it as a non-droppable
     // floor so the model always sees the message it is answering.
@@ -261,7 +310,7 @@ private extension ContextBuilder {
       SectionUnit(
         id: group.id,
         content: group.messages.map { message in
-          message.content + (message.toolCallsJSON ?? "")
+          historyContent(message, includeSender: includeSenders) + (message.toolCallsJSON ?? "")
         }.joined(separator: "\n"),
         canTruncate: false
       )
@@ -309,7 +358,8 @@ private extension ContextBuilder {
   func recallSection(
     snapshot: SessionContextSnapshot,
     sessionId: Int64,
-    residual: Int
+    residual: Int,
+    scope: RecallScope
   ) -> FittableSection? {
     let cap = cap(for: .recall, residual: residual)
     guard cap > 0,
@@ -325,6 +375,7 @@ private extension ContextBuilder {
         currentSessionId: sessionId,
         windowStartMessageId: snapshot.windowStartMessageId,
         excludedMessageIds: snapshot.historyMessageIds,
+        scope: scope,
         limit: Self.recallCandidateLimit
       )
     } catch {
@@ -337,7 +388,7 @@ private extension ContextBuilder {
       limit: Self.recallInjectionLimit
     )
     let units = selected.compactMap { hit -> SectionUnit? in
-      let content = cappedRecallContent(hit.content)
+      let content = cappedRecallContent(historyContent(hit.content, sender: hit.sender))
       return content.isEmpty
         ? nil
         : SectionUnit(id: "recall-\(hit.id)", content: content, canTruncate: true)
@@ -451,9 +502,11 @@ public extension ContextBuilder {
   /// The system-tier prompt materials in the pinned order (ARCHITECTURE.md §11), RAW (pre "## path"
   /// wrapping), folded into the injected static sub-hash. Reused verbatim at pick-up (the
   /// persisted `policy_version`, stamped by `TurnRunner`) and recomputed at callback resolution so
-  /// the two can never diverge. BOTH prompt variants fold in — the recompute seams are zero-argument
-  /// closures with no run (hence no origin) in scope, so the fingerprint must be origin-independent;
-  /// an edit to either variant conservatively invalidates parked approvals. `public` because
+  /// the two can never diverge. Both approval-capable prompt variants fold in — the recompute seams
+  /// are zero-argument closures with no run (hence no origin) in scope, so the fingerprint must be
+  /// origin-independent; an edit to either variant conservatively invalidates parked approvals.
+  /// The group prompt is excluded because group runs have no tools and cannot park an approval.
+  /// `public` because
   /// `TurnRunner` (ClawGateway) stamps with it cross-module and `assemble` returns it — a `private`
   /// helper would be invisible to both the stamp seam and `@testable`.
   func currentPolicyVersion() -> String {
@@ -522,9 +575,14 @@ private extension ContextBuilder {
 private extension ContextBuilder {
   func renderMessages(
     fitted: [FittedSection],
-    snapshot: SessionContextSnapshot
+    snapshot: SessionContextSnapshot,
+    origin: RunOrigin
   ) -> [ChatMessage] {
-    let historyMessages = fittedHistoryMessages(fitted: fitted, snapshot: snapshot)
+    let historyMessages = fittedHistoryMessages(
+      fitted: fitted,
+      snapshot: snapshot,
+      includeSenders: origin.isGroup
+    )
     // Compare GROUPS, not raw rows: one unit per group by construction, so a kept-unit-count
     // shortfall against the full group count means an exchange (or plain row) was dropped.
     let keptHistoryGroupCount = Set(
@@ -570,7 +628,8 @@ private extension ContextBuilder {
   /// group's rows.
   func fittedHistoryMessages(
     fitted: [FittedSection],
-    snapshot: SessionContextSnapshot
+    snapshot: SessionContextSnapshot,
+    includeSenders: Bool
   ) -> [ChatMessage] {
     guard let historySection = fitted.first(where: { section in section.id == .history }) else {
       return []
@@ -630,7 +689,7 @@ private extension ContextBuilder {
             )
           )
         case .user:
-          rendered.append(userMessage(from: message))
+          rendered.append(userMessage(from: message, includeSender: includeSenders))
         case .system:
           rendered.append(ChatMessage(role: .system, content: message.content))
         }
@@ -643,12 +702,12 @@ private extension ContextBuilder {
   /// Provenance decides the fence and nothing else. The image rides on every user row, trusted or
   /// not: gating it on provenance would let a single change of tier drop an image with no error and
   /// no failing test.
-  func userMessage(from message: StoredMessage) -> ChatMessage {
-    var body = message.content
+  func userMessage(from message: StoredMessage, includeSender: Bool) -> ChatMessage {
+    var body = historyContent(message, includeSender: includeSender)
     if message.provenance == .untrusted {
       body = LabeledContextFactory.make(
         label: Self.untrustedUserLabel,
-        content: message.content
+        content: body
       ).render()
     }
 
@@ -663,6 +722,17 @@ private extension ContextBuilder {
         [.image(image), .text(body)]
       } ?? [.text(body)]
     return ChatMessage(role: .user, content: MessageContent(parts: parts))
+  }
+
+  func historyContent(_ message: StoredMessage, includeSender: Bool) -> String {
+    historyContent(message.content, sender: includeSender ? message.sender : nil)
+  }
+
+  func historyContent(_ content: String, sender: TelegramSender?) -> String {
+    guard let sender else {
+      return content
+    }
+    return "\(sender.historyHeader):\n\(content)"
   }
 
   /// True when a row records a photo whose bytes did not survive to assembly — evicted under cache

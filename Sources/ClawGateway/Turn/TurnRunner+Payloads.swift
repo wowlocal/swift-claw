@@ -20,10 +20,12 @@ extension TurnRunner {
   struct CommitContext {
     let runId: Int64
     let sessionId: Int64
-    let chatId: Int64
+    let destination: TelegramDestination
     let ownerNotices: [String]
     let origin: RunOrigin
     let committedAt: Date
+
+    var chatId: Int64 { destination.chatId }
   }
 }
 
@@ -67,10 +69,18 @@ extension TurnRunner {
   /// Splits an assistant reply into deterministic outbox chunks (grapheme-capped, FNV-1a hashed).
   /// Mechanical helper for the `.completed` path — not part of the commit ordering.
   func outboxChunks(for content: String, chatId: Int64) -> [OutboxChunk] {
+    outboxChunks(for: content, destination: TelegramDestination(chatId: chatId))
+  }
+
+  func outboxChunks(
+    for content: String,
+    destination: TelegramDestination
+  ) -> [OutboxChunk] {
     ReplySplitter.split(text: content).enumerated().map { index, payload in
       OutboxChunk(
         stepIndex: index,
-        chatId: chatId,
+        chatId: destination.chatId,
+        messageThreadId: destination.messageThreadId,
         payload: payload,
         payloadHash: ContentHash.fnv1a(payload)
       )

@@ -146,6 +146,32 @@ the model answers, and clawd streams the reply in as a growing draft.
 Two commands to know from day one: `/stop` cancels the current turn, `/new` starts a
 fresh session.
 
+### Optional: connect one shared group
+
+clawd can also listen in one Telegram group or supergroup. This is opt-in and separate from
+your private allowlist:
+
+1. In BotFather, send `/setprivacy`, choose the bot, and select **Disable**. With privacy mode
+   enabled Telegram does not deliver ambient group messages, so clawd cannot build the history.
+2. Add the bot to the group. For a forum supergroup, no special topic configuration is needed.
+3. With `clawd run` in the foreground and no group configured yet, send one group message. clawd
+   logs the negative chat ID without logging the message text.
+4. Stop clawd, add the logged value to `clawd.env`, re-source it, and restart:
+
+   ```bash
+   CLAW_TELEGRAM_GROUP_CHAT_ID=-1001234567890
+   ```
+
+Every member of that exact chat can now start a turn with an exact `@your_bot` mention. Ordinary
+messages are archived without calling the model. In forum topics, recent context and replies stay
+in the originating topic; relevant older messages may be recalled from other topics in the same
+chat. History begins with updates Telegram delivers after the bot is present and privacy mode is
+disabled — Telegram does not provide a backlog of earlier messages.
+
+The shared surface is deliberately conversational only: it receives none of your private
+workspace, personal memory, skills, commands, schedules, approvals, or tools. Removing the env
+value and restarting disables new shared-chat ingestion; it does not erase already stored rows.
+
 ## 6. Make it yours
 
 Persona, behavior rules, and your profile live in Markdown files under
@@ -244,6 +270,11 @@ This route is unofficial and vendor-dependent; details and caveats in
   instance holds the lock, 13 storage error. `clawd doctor` explains the specifics.
 - **The bot ignores you:** confirm your numeric ID is in `CLAW_ALLOWLIST` and that you
   restarted after changing it; the daemon seeds the allowlist at boot.
+- **The bot answers mentions but lacks surrounding group context:** disable privacy mode with
+  BotFather's `/setprivacy`, then restart clawd. Only messages Telegram actually delivers can be
+  archived.
+- **A forum reply lands outside its topic:** confirm the incoming message has a Telegram topic
+  and that the configured value is the supergroup's negative `chat.id`, not a topic ID.
 - **You cannot find your Telegram ID:** send `/start`, not an ordinary message.
 - **Someone you removed can still talk to the bot:** `CLAW_ALLOWLIST` seeds the database
   and never deletes from it. Revoking takes a row deletion; see

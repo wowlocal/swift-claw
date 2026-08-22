@@ -200,14 +200,15 @@ extension RunStoreGRDB {
   ) throws -> Bool {
     try db.execute(
       sql: """
-        INSERT OR IGNORE INTO outbound_deliveries(run_id, step_index, chat_id, dedup_key, payload,
-          payload_hash, approval_id, reply_markup, status, created_ts)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'PENDING', ?)
+        INSERT OR IGNORE INTO outbound_deliveries(run_id, step_index, chat_id, message_thread_id,
+          dedup_key, payload, payload_hash, approval_id, reply_markup, status, created_ts)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'PENDING', ?)
         """,
       arguments: [
         runId,
         chunk.stepIndex,
         chunk.chatId,
+        chunk.messageThreadId,
         OutboxDedupKey.make(runId: runId, stepIndex: chunk.stepIndex),
         chunk.payload,
         chunk.payloadHash,
@@ -239,6 +240,7 @@ extension RunStoreGRDB {
     return OutboxChunk(
       stepIndex: chunk.stepIndex + base,
       chatId: chunk.chatId,
+      messageThreadId: chunk.messageThreadId,
       payload: chunk.payload,
       payloadHash: chunk.payloadHash,
       approvalId: chunk.approvalId,

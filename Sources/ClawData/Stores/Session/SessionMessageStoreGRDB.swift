@@ -64,14 +64,18 @@ public struct SessionMessageStoreGRDB: SessionMessageStore {
         )
       }
 
-      let sessionId = try Self.upsertSession(db, sessionKey: inbound.sessionKey, now: inbound.ts)
-      // Owner-typed input is trusted-tier; machine-derived inbound text (a voice transcript)
-      // arrives `.untrusted` and taints the session in this same fused write, so context assembly
-      // fences it and the exfil gate arms without any tool having run.
+      let sessionId = try Self.upsertSession(
+        db,
+        sessionKey: inbound.sessionKey,
+        conversationKind: inbound.conversationKind,
+        destination: inbound.destination,
+        now: inbound.ts
+      )
       try db.execute(
         sql: """
-          INSERT INTO messages(session_id, role, content, provenance, ts)
-          VALUES (?, ?, ?, ?, ?)
+          INSERT INTO messages(session_id, role, content, provenance, ts, telegram_message_id,
+            is_edited, sender_kind, sender_id, sender_display_name, sender_username, sender_is_bot)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
           """,
         arguments: [
           sessionId,
@@ -79,18 +83,38 @@ public struct SessionMessageStoreGRDB: SessionMessageStore {
           inbound.text,
           inbound.provenance.rawValue,
           inbound.ts,
+          inbound.telegramMessageId,
+          inbound.isEdited,
+          inbound.sender?.kind.rawValue,
+          inbound.sender?.id,
+          inbound.sender?.displayName,
+          inbound.sender?.username,
+          inbound.sender?.isBot,
         ]
       )
       let messageId = db.lastInsertedRowID
 
+      // Group messages and machine-derived DM input are attacker-influenceable. Taint is sticky and
+      // lands in the same transaction as the content, so no later context read can observe one
+      // without the other.
       if inbound.provenance == .untrusted {
         try RunStoreGRDB.setSessionTainted(db, sessionId: sessionId, now: inbound.ts)
       }
 
+      guard let origin = inbound.disposition.runOrigin else {
+        return ClaimResult(
+          newlyClaimed: true,
+          sessionId: sessionId,
+          messageId: messageId,
+          runId: nil,
+          triggerMessageId: nil
+        )
+      }
+
       try db.execute(
         sql: """
-          INSERT INTO runs(session_id, state, created_ts, updated_ts, trigger_message_id)
-          VALUES (?, ?, ?, ?, ?)
+          INSERT INTO runs(session_id, state, created_ts, updated_ts, trigger_message_id, origin)
+          VALUES (?, ?, ?, ?, ?, ?)
           """,
         arguments: [
           sessionId,
@@ -98,6 +122,7 @@ public struct SessionMessageStoreGRDB: SessionMessageStore {
           inbound.ts,
           inbound.ts,
           messageId,
+          origin.rawValue,
         ]
       )
       let runId = db.lastInsertedRowID
@@ -158,7 +183,8 @@ public struct SessionMessageStoreGRDB: SessionMessageStore {
       let rows = try Row.fetchAll(
         db,
         sql: """
-          SELECT id, role, content, provenance, tool_calls, tool_call_id,
+          SELECT id, role, content, provenance, tool_calls, tool_call_id, sender_kind, sender_id,
+            sender_display_name, sender_username, sender_is_bot,
             \(ProviderStateCoding.selection)
           FROM messages
           WHERE session_id = ? AND id > ? AND id <= ? AND id >= ?
@@ -214,13 +240,30 @@ public struct SessionMessageStoreGRDB: SessionMessageStore {
 
   /// Upsert keyed on `session_key`; returns the row id. Reused inside `claimAndPersistInbound`'s
   /// transaction so the session create stays in the one fused write.
-  static func upsertSession(_ db: Database, sessionKey: String, now: Date) throws -> Int64 {
+  static func upsertSession(
+    _ db: Database,
+    sessionKey: String,
+    conversationKind: ConversationKind? = nil,
+    destination: TelegramDestination? = nil,
+    now: Date
+  ) throws -> Int64 {
+    let resolvedKind = conversationKind ?? SessionKey.conversationKind(from: sessionKey)
+    let resolvedDestination = destination ?? SessionKey.destination(from: sessionKey)
     try db.execute(
       sql: """
-        INSERT INTO sessions(session_key, created_ts, updated_ts, tainted) VALUES (?, ?, ?, 0)
+        INSERT INTO sessions(session_key, created_ts, updated_ts, tainted, conversation_kind,
+          telegram_chat_id, telegram_thread_id)
+        VALUES (?, ?, ?, 0, ?, ?, ?)
         ON CONFLICT(session_key) DO UPDATE SET updated_ts = excluded.updated_ts
         """,
-      arguments: [sessionKey, now, now]
+      arguments: [
+        sessionKey,
+        now,
+        now,
+        resolvedKind.rawValue,
+        resolvedDestination?.chatId,
+        resolvedDestination?.messageThreadId,
+      ]
     )
 
     let sessionId = try Int64.fetchOne(
@@ -260,7 +303,8 @@ public struct SessionMessageStoreGRDB: SessionMessageStore {
       provenance: provenance,
       toolCallsJSON: row["tool_calls"],
       toolCallId: row["tool_call_id"],
-      providerState: ProviderStateCoding.decode(row)
+      providerState: ProviderStateCoding.decode(row),
+      sender: TelegramSenderCoding.decode(row)
     )
   }
 }

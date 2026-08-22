@@ -288,6 +288,33 @@ private func client(status: Int, json: String) -> TelegramClient {
     #expect(linkPreviewOptions["is_disabled"] as? Bool == true)
   }
 
+  @Test func sendMessageCarriesTheForumTopicDestination() async throws {
+    // given
+    let recorder = RecordingHTTPExecutor.Recorder()
+    let http = RecordingHTTPExecutor(
+      recorder: recorder,
+      result: HTTPResult(
+        statusCode: 200,
+        headers: [:],
+        body: Data(#"{"ok":true,"result":{"message_id":7,"chat":{"id":-1001234}}}"#.utf8)
+      )
+    )
+    let telegram = TelegramClient(token: "T", http: http, baseURL: "https://example.test")
+
+    // when
+    _ = try await telegram.sendMessage(
+      destination: TelegramDestination(chatId: -1_001_234, messageThreadId: 77),
+      text: "topic reply",
+      replyMarkup: nil
+    )
+
+    // then
+    let call = try #require(await recorder.calls.first)
+    let body = try #require(JSONSerialization.jsonObject(with: call.body) as? [String: Any])
+    #expect(body["chat_id"] as? Int == -1_001_234)
+    #expect(body["message_thread_id"] as? Int == 77)
+  }
+
   @Test func getUpdatesSocketTimeoutIsLongPollTimeoutPlusTenSeconds() async throws {
     // given (§18-A3): the socket read timeout must outlive the long poll by exactly 10 s, so a
     // stalled poll is cut and re-issued instead of hanging the loop across a network gap

@@ -3,6 +3,13 @@
 /// is Telegram-backed and injected by the gateway; tests use a recording mock.
 public protocol TypingIndicator: Sendable {
   func sendTyping(chatId: Int64) async
+  func sendTyping(destination: TelegramDestination) async
+}
+
+public extension TypingIndicator {
+  func sendTyping(destination: TelegramDestination) async {
+    await sendTyping(chatId: destination.chatId)
+  }
 }
 
 public enum TypingIndicatorTiming {
@@ -20,6 +27,29 @@ public func withTypingPulse<Result>(
     group.addTask {
       while !Task.isCancelled {
         await indicator.sendTyping(chatId: chatId)
+        try? await clock.sleep(for: interval)
+      }
+    }
+
+    defer {
+      group.cancelAll()
+    }
+
+    return try await operation()
+  }
+}
+
+public func withTypingPulse<Result>(
+  destination: TelegramDestination,
+  indicator: any TypingIndicator,
+  clock: any Clock<Duration>,
+  every interval: Duration = TypingIndicatorTiming.reissueInterval,
+  operation: () async throws -> Result
+) async rethrows -> Result {
+  try await withThrowingTaskGroup(of: Void.self) { group in
+    group.addTask {
+      while !Task.isCancelled {
+        await indicator.sendTyping(destination: destination)
         try? await clock.sleep(for: interval)
       }
     }

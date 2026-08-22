@@ -32,6 +32,7 @@ extension DaemonBuilder {
       memoryCommands: stores.memoryCommands,
       pendingConfirmations: coordination.pendingConfirmations,
       botUsername: botUsername,
+      groupChatId: config.telegramGroupChatId,
       accessControl: AccessControl(allowlist: stores.allowlist),
       delivery: transport,
       turnRunner: turnRunner,

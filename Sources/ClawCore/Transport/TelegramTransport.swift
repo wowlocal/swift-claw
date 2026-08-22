@@ -17,12 +17,22 @@ public protocol MessageDelivery: Sendable {
   /// `replyMarkup` is a Telegram `reply_markup` JSON string attaching an inline keyboard, or nil for
   /// no keyboard. The approval prompt's buttons ride this.
   func sendMessage(chatId: Int64, text: String, replyMarkup: String?) async throws -> Int64
+  func sendMessage(
+    destination: TelegramDestination,
+    text: String,
+    replyMarkup: String?
+  ) async throws -> Int64
   /// Sends a rich-markdown message (`sendRichMessage` / `InputRichMessage{ markdown }`, Bot API 10.1).
   /// The markdown string is passed verbatim — no escaper, no converter — and rendered server-side.
   /// Returns the assigned `message_id` like `sendMessage`, and takes the same optional keyboard. On
   /// any rich-send error the dispatcher re-sends the chunk as plain `sendMessage`, so this never has
   /// to succeed for a reply to land.
   func sendRichMessage(chatId: Int64, markdown: String, replyMarkup: String?) async throws -> Int64
+  func sendRichMessage(
+    destination: TelegramDestination,
+    markdown: String,
+    replyMarkup: String?
+  ) async throws -> Int64
 }
 
 /// Answers and disarms inline-button callbacks. A separate port so the callback handler can hold a
@@ -41,9 +51,15 @@ public protocol CallbackResponding: Sendable {
 public protocol TelegramTransport: ChannelIntake, MessageDelivery, CallbackResponding {
   func getMe() async throws -> BotIdentity
   func sendRichMessageDraft(chatId: Int64, draftId: Int64, markdown: String) async throws -> Bool
+  func sendRichMessageDraft(
+    destination: TelegramDestination,
+    draftId: Int64,
+    markdown: String
+  ) async throws -> Bool
   /// Emits a Telegram chat action (e.g. `"typing"`). Fire-and-forget: the action auto-expires (~5s),
   /// so callers re-issue it on an interval and ignore failures — a missing indicator is never fatal.
   func sendChatAction(chatId: Int64, action: String) async throws
+  func sendChatAction(destination: TelegramDestination, action: String) async throws
   /// Registers the bot's command list with Telegram so the picker appears when a user types `/`.
   func setMyCommands(_ commands: [BotMenuCommand]) async throws
 }
@@ -55,6 +71,22 @@ extension TelegramTransport {
     markdown: String
   ) async throws -> Bool {
     throw TelegramError.transport("sendRichMessageDraft not implemented")
+  }
+
+  public func sendRichMessageDraft(
+    destination: TelegramDestination,
+    draftId: Int64,
+    markdown: String
+  ) async throws -> Bool {
+    try await sendRichMessageDraft(
+      chatId: destination.chatId,
+      draftId: draftId,
+      markdown: markdown
+    )
+  }
+
+  public func sendChatAction(destination: TelegramDestination, action: String) async throws {
+    try await sendChatAction(chatId: destination.chatId, action: action)
   }
 
   public func setMyCommands(_ commands: [BotMenuCommand]) async throws {}
@@ -73,6 +105,26 @@ extension TelegramTransport {
 }
 
 extension MessageDelivery {
+  public func sendMessage(
+    destination: TelegramDestination,
+    text: String,
+    replyMarkup: String?
+  ) async throws -> Int64 {
+    try await sendMessage(chatId: destination.chatId, text: text, replyMarkup: replyMarkup)
+  }
+
+  public func sendRichMessage(
+    destination: TelegramDestination,
+    markdown: String,
+    replyMarkup: String?
+  ) async throws -> Int64 {
+    try await sendRichMessage(
+      chatId: destination.chatId,
+      markdown: markdown,
+      replyMarkup: replyMarkup
+    )
+  }
+
   /// The keyboardless spelling every ordinary reply uses. A conformer implements only the
   /// `replyMarkup:` form, so a transport that cannot render keyboards refuses there rather than
   /// having to reject an argument it was handed by a second requirement.
@@ -87,6 +139,13 @@ extension MessageDelivery {
 
 public protocol RichDraftStreaming: Sendable {
   func sendDraft(chatId: Int64, draftId: Int64, markdown: String) async
+  func sendDraft(destination: TelegramDestination, draftId: Int64, markdown: String) async
+}
+
+public extension RichDraftStreaming {
+  func sendDraft(destination: TelegramDestination, draftId: Int64, markdown: String) async {
+    await sendDraft(chatId: destination.chatId, draftId: draftId, markdown: markdown)
+  }
 }
 
 public struct NoopRichDraftStreaming: RichDraftStreaming {

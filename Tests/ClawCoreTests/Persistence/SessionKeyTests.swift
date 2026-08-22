@@ -18,4 +18,20 @@ import Testing
     #expect(SessionKey.telegramDM(chatId: 42) == "tg:dm:42")
     #expect(SessionKey.chatId(from: SessionKey.telegramDM(chatId: 42)) == 42)
   }
+
+  @Test func telegramGroupTopicKeysRoundTripTheCompleteDestination() throws {
+    // given
+    let destination = TelegramDestination(chatId: -1_001_234, messageThreadId: 77)
+
+    // when
+    let key = SessionKey.telegramGroup(
+      chatId: destination.chatId,
+      messageThreadId: destination.messageThreadId
+    )
+
+    // then
+    #expect(key == "tg:group:-1001234:topic:77")
+    #expect(SessionKey.destination(from: key) == destination)
+    #expect(SessionKey.conversationKind(from: key) == .group)
+  }
 }

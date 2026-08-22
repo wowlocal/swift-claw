@@ -246,6 +246,75 @@ struct ContextBuilderTests {
     #expect(untrusted.contains(BudgetFitter.truncationMarker))
   }
 
+  @Test func groupContextExcludesPrivateSourcesAndAttributesSharedChatAuthors() throws {
+    // given
+    let memoryStore = FakeMemoryStore(items: [
+      memory(id: 1, text: "private memory", importance: .high)
+    ])
+    let retriever = FakeRetriever(
+      hits: [
+        RecallHit(
+          id: 90,
+          sessionId: 9,
+          role: .user,
+          content: "earlier shared detail",
+          score: RecallScore(value: 10),
+          createdAt: Date(timeIntervalSince1970: 90),
+          sender: TelegramSender(kind: .user, id: 8, displayName: "Grace")
+        )
+      ]
+    )
+    let builder = makeBuilder(
+      workspace: FakeWorkspace(
+        files: [
+          .soul: .present("private soul"),
+          .agents: .present("private agent rules"),
+          .tools: .present("private tool rules"),
+          .user: .present("private owner profile"),
+          .memory: .present("private curated memory"),
+        ]
+      ),
+      memoryStore: memoryStore,
+      retriever: retriever
+    )
+    let sender = TelegramSender(
+      kind: .user,
+      id: 7,
+      displayName: "Ada",
+      username: "ada"
+    )
+    let snapshot = SessionContextSnapshot(
+      history: [
+        StoredMessage(
+          role: .user,
+          content: "@claw_bot what did Grace say?",
+          provenance: .untrusted,
+          sender: sender
+        )
+      ],
+      historyMessageIds: [44],
+      windowStartMessageId: nil,
+      isTainted: true,
+      hasPrivateData: false
+    )
+
+    // when
+    let result = try builder.assemble(snapshot: snapshot, sessionId: 42, origin: .group)
+
+    // then
+    let rendered = result.messages.map(\.content.text).joined(separator: "\n")
+    #expect(rendered.contains("configured Telegram group"))
+    #expect(rendered.contains("Telegram user Ada @ada id=7"))
+    #expect(rendered.contains("Telegram user Grace id=8"))
+    #expect(rendered.contains("earlier shared detail"))
+    #expect(rendered.contains("private soul") == false)
+    #expect(rendered.contains("private owner profile") == false)
+    #expect(rendered.contains("private memory") == false)
+    #expect(result.hasPrivateDataAccess == false)
+    #expect(memoryStore.fetchRankedCalls.isEmpty)
+    #expect(retriever.calls.first?.scope == .telegramGroup)
+  }
+
   @Test func skillsRenderAsUntrustedIndexWithoutSettingPrivateAccess() throws {
     // given
     let builder = makeBuilder(
@@ -868,6 +937,7 @@ private final class FakeRetriever: Retriever, @unchecked Sendable {
     let currentSessionId: Int64
     let windowStartMessageId: Int64?
     let excludedMessageIds: [Int64]
+    let scope: RecallScope
     let limit: Int
   }
 
@@ -885,12 +955,49 @@ private final class FakeRetriever: Retriever, @unchecked Sendable {
     excludedMessageIds: [Int64],
     limit: Int
   ) throws(StoreError) -> [RecallHit] {
+    try record(
+      query: query,
+      currentSessionId: currentSessionId,
+      windowStartMessageId: windowStartMessageId,
+      excludedMessageIds: excludedMessageIds,
+      scope: .personal,
+      limit: limit
+    )
+  }
+
+  func searchRelevantMessages(
+    query: String,
+    currentSessionId: Int64,
+    windowStartMessageId: Int64?,
+    excludedMessageIds: [Int64],
+    scope: RecallScope,
+    limit: Int
+  ) throws(StoreError) -> [RecallHit] {
+    try record(
+      query: query,
+      currentSessionId: currentSessionId,
+      windowStartMessageId: windowStartMessageId,
+      excludedMessageIds: excludedMessageIds,
+      scope: scope,
+      limit: limit
+    )
+  }
+
+  private func record(
+    query: String,
+    currentSessionId: Int64,
+    windowStartMessageId: Int64?,
+    excludedMessageIds: [Int64],
+    scope: RecallScope,
+    limit: Int
+  ) throws(StoreError) -> [RecallHit] {
     calls.append(
       Call(
         query: query,
         currentSessionId: currentSessionId,
         windowStartMessageId: windowStartMessageId,
         excludedMessageIds: excludedMessageIds,
+        scope: scope,
         limit: limit
       )
     )

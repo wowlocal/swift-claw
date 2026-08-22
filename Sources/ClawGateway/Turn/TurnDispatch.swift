@@ -22,34 +22,45 @@ struct TurnDispatch: Sendable {
     message: IncomingMessage,
     text: String,
     provenance: Provenance = .trusted,
-    image: ImagePart? = nil
+    image: ImagePart? = nil,
+    disposition: InboundDisposition? = nil
   ) async throws(RoutingHalt) -> HandleOutcome {
+    let isGroup = message.chatType.isGroup
+    let resolvedDisposition = disposition ?? .startRun(origin: isGroup ? .group : .interactive)
     let inbound = InboundMessage(
       updateId: rawUpdate.updateId,
-      sessionKey: SessionKey.telegramDM(chatId: message.chatId),
+      sessionKey: sessionKey(for: message),
       chatId: message.chatId,
       userId: message.userId,
       text: text,
       isEdited: message.isEdited,
       provenance: provenance,
+      telegramMessageId: message.messageId,
+      messageThreadId: message.messageThreadId,
+      sender: isGroup ? message.sender : nil,
+      conversationKind: isGroup ? .group : .privateChat,
+      disposition: resolvedDisposition,
       ts: now()
     )
 
     let claim = try await replies.perform(
       "inbound persist",
       updateId: rawUpdate.updateId,
-      chatId: message.chatId
+      destination: message.destination
     ) {
       try sessionMessages.claimAndPersistInbound(inbound)
     }
 
+    guard claim.newlyClaimed else {
+      return replies.skipDuplicate(updateId: rawUpdate.updateId)
+    }
+
     guard
-      claim.newlyClaimed,
       let sessionId = claim.sessionId,
       let runId = claim.runId,
       let triggerMessageId = claim.triggerMessageId
     else {
-      return replies.skipDuplicate(updateId: rawUpdate.updateId)
+      return .processed
     }
 
     // The claim is what mints the row id the bytes are keyed by, so the deposit can only happen
@@ -75,11 +86,35 @@ struct TurnDispatch: Sendable {
     await enqueuer.enqueue(
       runId: runId,
       sessionId: sessionId,
-      chatId: message.chatId,
+      destination: message.destination,
       triggerMessageId: triggerMessageId,
       log: runLog
     )
 
     return .processed
+  }
+
+  func archive(
+    rawUpdate: RawUpdate,
+    message: IncomingMessage,
+    text: String
+  ) async throws(RoutingHalt) -> HandleOutcome {
+    try await dispatch(
+      rawUpdate: rawUpdate,
+      message: message,
+      text: text,
+      provenance: .untrusted,
+      disposition: .archiveOnly
+    )
+  }
+
+  private func sessionKey(for message: IncomingMessage) -> String {
+    if message.chatType.isGroup {
+      return SessionKey.telegramGroup(
+        chatId: message.chatId,
+        messageThreadId: message.messageThreadId
+      )
+    }
+    return SessionKey.telegramDM(chatId: message.chatId)
   }
 }
