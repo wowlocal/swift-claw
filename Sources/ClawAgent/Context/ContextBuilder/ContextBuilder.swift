@@ -11,7 +11,7 @@ public struct ContextBuilder: Sendable {
   /// the label this builder emits instead of repeating the literal.
   package static let lessonsLabel = "job lessons"
 
-  let systemPrompt: String
+  let systemPrompt: @Sendable () -> String
   let proactiveSystemPrompt: String
 
   let workspace: any WorkspaceReading
@@ -34,10 +34,11 @@ public struct ContextBuilder: Sendable {
     budget: ContextBudget,
     fenceLabels: ToolFenceLabels = .undeclared,
     policyStaticSubhash: String = "",
+    systemPromptProvider: (@Sendable () -> String)? = nil,
     now: @escaping @Sendable () -> Date = Date.init,
     warn: @escaping @Sendable (String) -> Void = { _ in }
   ) {
-    self.systemPrompt = systemPrompt
+    self.systemPrompt = systemPromptProvider ?? { systemPrompt }
     self.proactiveSystemPrompt = proactiveSystemPrompt
 
     self.workspace = workspace
@@ -62,6 +63,7 @@ public struct ContextBuilder: Sendable {
     lessons: LessonSet? = nil
   ) throws -> BuildResult {
     var ownerNotices: [String] = []
+    let interactiveSystemPrompt = systemPrompt()
 
     // An empty set is not a row: it says only that the job has learned nothing yet, so rendering
     // it would spend budget and raise taint for no content.
@@ -70,6 +72,7 @@ public struct ContextBuilder: Sendable {
     }
     let fixedSections = buildFixedSections(
       origin: origin,
+      interactiveSystemPrompt: interactiveSystemPrompt,
       lessons: pinned,
       ownerNotices: &ownerNotices
     )
@@ -97,7 +100,7 @@ public struct ContextBuilder: Sendable {
       ownerNotices: ownerNotices,
       hasPrivateDataAccess: hasPrivateDataAccess(fitted),
       hasPinnedLessons: pinned != nil,
-      policyVersion: currentPolicyVersion()
+      policyVersion: policyVersion(interactiveSystemPrompt: interactiveSystemPrompt)
     )
   }
 }
@@ -114,10 +117,14 @@ public extension ContextBuilder {
   /// `TurnRunner` (ClawGateway) stamps with it cross-module and `assemble` returns it — a `private`
   /// helper would be invisible to both the stamp seam and `@testable`.
   func currentPolicyVersion() -> String {
+    policyVersion(interactiveSystemPrompt: systemPrompt())
+  }
+
+  private func policyVersion(interactiveSystemPrompt: String) -> String {
     PolicyFingerprint.combined(
       staticSubhash: policyStaticSubhash,
       promptMaterials: [
-        systemPrompt,
+        interactiveSystemPrompt,
         proactiveSystemPrompt,
         rawPromptText(.soul),
         rawPromptText(.agents),

@@ -57,11 +57,12 @@ extension MessageRouter {
     message: IncomingMessage
   ) async -> HandleOutcome {
     switch denial {
-    case .unlistedChat:
+    case .unlistedChat, .unlistedTopic:
       let title = message.chatTitle ?? "(untitled)"
       logger.info(
         """
-        ignoring update \(rawUpdate.updateId) from unlisted chat \(message.chatId) \
+        ignoring update \(rawUpdate.updateId) from unlisted chat/topic \(message.chatId) \
+        thread \(message.messageThreadId.map(String.init) ?? "general") \
         "\(title)" (\(message.chatKind.apiValue))
         """
       )

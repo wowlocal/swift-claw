@@ -6,6 +6,7 @@ import Foundation
 extension ContextBuilder {
   func buildFixedSections(
     origin: RunOrigin,
+    interactiveSystemPrompt: String,
     lessons: LessonSet?,
     ownerNotices: inout [String]
   ) -> [FittableSection] {
@@ -15,7 +16,7 @@ extension ContextBuilder {
         units: [
           SectionUnit(
             id: "policy",
-            content: origin.isProactive ? proactiveSystemPrompt : systemPrompt,
+            content: origin.isProactive ? proactiveSystemPrompt : interactiveSystemPrompt,
             canTruncate: false
           )
         ]

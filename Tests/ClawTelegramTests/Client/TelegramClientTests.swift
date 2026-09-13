@@ -294,8 +294,36 @@ private func client(status: Int, json: String) -> TelegramClient {
     let body = try #require(JSONSerialization.jsonObject(with: call.body) as? [String: Any])
     #expect(body["chat_id"] as? Int == 42)
     #expect(body["text"] as? String == "https://evil.example/exfil")
+    #expect(body["disable_notification"] as? Bool == false)
     let linkPreviewOptions = try #require(body["link_preview_options"] as? [String: Any])
     #expect(linkPreviewOptions["is_disabled"] as? Bool == true)
+  }
+
+  @Test func sendMessageCanSuppressNotifications() async throws {
+    // given
+    let recorder = RecordingHTTPExecutor.Recorder()
+    let http = RecordingHTTPExecutor(
+      recorder: recorder,
+      result: HTTPResult(
+        statusCode: 200,
+        headers: [:],
+        body: Data(#"{"ok":true,"result":{"message_id":7,"chat":{"id":42}}}"#.utf8)
+      )
+    )
+    let telegram = TelegramClient(
+      token: "T",
+      http: http,
+      baseURL: "https://example.test",
+      silentMessages: true
+    )
+
+    // when
+    _ = try await telegram.sendMessage(chatId: 42, text: "quiet")
+
+    // then
+    let call = try #require(await recorder.calls.first)
+    let body = try #require(JSONSerialization.jsonObject(with: call.body) as? [String: Any])
+    #expect(body["disable_notification"] as? Bool == true)
   }
 
   @Test func getUpdatesSocketTimeoutIsLongPollTimeoutPlusTenSeconds() async throws {

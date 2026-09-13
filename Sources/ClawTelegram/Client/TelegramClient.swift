@@ -12,6 +12,7 @@ public struct TelegramClient: TelegramTransport {
   private let http: any HTTPExecuting
   private let downloadHTTP: (any HTTPExecuting)?
   private let baseURL: String
+  private let silentMessages: Bool
   /// HTTP read timeout must exceed the long-poll timeout so the socket doesn't fire first.
   private let httpTimeoutSlackSeconds: Int
 
@@ -20,12 +21,14 @@ public struct TelegramClient: TelegramTransport {
     http: any HTTPExecuting,
     downloadHTTP: (any HTTPExecuting)? = nil,
     baseURL: String = "https://api.telegram.org",
+    silentMessages: Bool = false,
     httpTimeoutSlackSeconds: Int = TelegramClient.defaultHTTPTimeoutSlackSeconds
   ) {
     self.token = token
     self.http = http
     self.downloadHTTP = downloadHTTP
     self.baseURL = baseURL
+    self.silentMessages = silentMessages
     self.httpTimeoutSlackSeconds = httpTimeoutSlackSeconds
   }
 
@@ -83,6 +86,7 @@ public struct TelegramClient: TelegramTransport {
       messageThreadId: target.messageThreadId,
       replyParameters: ReplyParameters(answering: target),
       linkPreviewOptions: LinkPreviewOptions(isDisabled: true),
+      disableNotification: silentMessages,
       replyMarkup: replyMarkup.flatMap(JSONValue.parse)
     )
     let message: TMessage = try await callMethod(
@@ -104,6 +108,7 @@ public struct TelegramClient: TelegramTransport {
       messageThreadId: target.messageThreadId,
       replyParameters: ReplyParameters(answering: target),
       linkPreviewOptions: LinkPreviewOptions(isDisabled: true),
+      disableNotification: silentMessages,
       replyMarkup: replyMarkup.flatMap(JSONValue.parse)
     )
     let message: TMessage = try await callMethod(
@@ -333,6 +338,7 @@ private struct SendMessageRequest: Encodable {
   let messageThreadId: Int64?
   let replyParameters: ReplyParameters?
   let linkPreviewOptions: LinkPreviewOptions
+  let disableNotification: Bool
   let replyMarkup: JSONValue?
 }
 
@@ -342,6 +348,7 @@ private struct SendRichMessageRequest: Encodable {
   let messageThreadId: Int64?
   let replyParameters: ReplyParameters?
   let linkPreviewOptions: LinkPreviewOptions
+  let disableNotification: Bool
   let replyMarkup: JSONValue?
 }
 

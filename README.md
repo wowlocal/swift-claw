@@ -127,7 +127,12 @@ and understand that their ordinary tool approvals are relaxed; see
 The separate [conference challenge profile](docs/CONFERENCE.md) accepts participant proposals in
 configured groups and forum topics through a fixed tool surface, with no personal memory or ordinary
 tools. Only the proposal's author can confirm it; private messages are ignored. It requires
-a dedicated nonpersonal host/account, state root and publication bot credential.
+a dedicated nonpersonal host/account, state root and publication bot credential. Optional
+`CLAW_GROUP_TOPICS` entries restrict intake to exact `chat_id:thread_id` pairs. Group Privacy must
+be disabled; conference approval binds the author's numeric ID and does not require bot admin rights.
+The operator can select one fixed `CLAW_CONFERENCE_CASE_FILE` or a
+`CLAW_CONFERENCE_SEASON_FILE` whose time zone and weekday entries switch the trusted challenge
+context automatically; the file is loaded once at startup.
 
 - **Default-deny.** Only allowlisted Telegram IDs get a conversation. clawd refuses
   everyone else, and answers `/start` with the sender's own numeric ID so you can
@@ -167,7 +172,8 @@ Persona and behavior live in Markdown files under `~/.swift-claw/workspace/`:
 MCP servers go in `~/.swift-claw/mcp.yaml`, with their tokens stored encrypted by
 `clawd mcp set-token`. Other runtime knobs are environment variables: the model route
 (`CLAW_LLM_MODEL`), an optional fallback route (`CLAW_LLM_FALLBACK_MODEL`, off unless you
-set it), USD budgets, schedules and quiet hours, voice locales, sandbox limits.
+set it), silent Telegram delivery (`CLAW_TELEGRAM_SILENT_MESSAGES`), USD budgets, schedules and
+quiet hours, voice locales, sandbox limits.
 [`.env.example`](.env.example) documents every variable;
 [docs/CUSTOMIZATION.md](docs/CUSTOMIZATION.md) is the guide.
 

@@ -16,6 +16,7 @@ import Testing
       AppConfig.EnvKey.stateRoot: root.path,
       AppConfig.EnvKey.llmModel: CompositionAcceptance.qualifiedModel,
       AppConfig.EnvKey.groupChats: String(chatID),
+      AppConfig.EnvKey.groupTopics: "\(chatID):\(ConferenceApprovedOriginFixture.threadID)",
     ])
     let http = ScriptedHTTPExecutor([
       .ok(
@@ -52,10 +53,14 @@ import Testing
     )
 
     // when / then
-    for kind in [ChatKind.private, .supergroup] {
+    for (index, kind, threadID) in [
+      (1, ChatKind.private, nil),
+      (2, ChatKind.supergroup, ConferenceApprovedOriginFixture.threadID + 1),
+      (3, ChatKind.supergroup, ConferenceApprovedOriginFixture.threadID),
+    ] {
       let outcome = await router.handle(
         rawUpdate: RawUpdate(
-          updateId: kind == .private ? 1 : 2,
+          updateId: Int64(index),
           message: RawMessage(
             messageId: 88,
             fromUserId: 101,
@@ -65,13 +70,15 @@ import Testing
             mediaKind: nil,
             chatKind: kind,
             chatTitle: nil,
-            messageThreadId: kind == .private ? nil : ConferenceApprovedOriginFixture.threadID,
+            messageThreadId: threadID,
             senderDisplayName: nil
           ),
           editedMessage: nil
         )
       )
-      #expect(outcome == (kind == .private ? .skipped : .processed))
+      #expect(
+        outcome == (threadID == ConferenceApprovedOriginFixture.threadID ? .processed : .skipped)
+      )
     }
     let requests = await http.recorded
     #expect(requests.count == 1)

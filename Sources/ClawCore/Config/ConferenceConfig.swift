@@ -4,27 +4,47 @@ public struct ConferenceConfig: Sendable, Equatable {
   public enum EnvKey {
     public static let enabled = "CLAW_CONFERENCE_ENABLED"
     public static let caseFile = "CLAW_CONFERENCE_CASE_FILE"
+    public static let seasonFile = "CLAW_CONFERENCE_SEASON_FILE"
     public static let expectedGitHubActor = "CLAW_CONFERENCE_EXPECTED_GITHUB_ACTOR"
   }
 
   public let enabled: Bool
   public let activeCase: ConferenceCase?
+  public let season: ConferenceSeason?
   public let expectedGitHubActor: String?
 
-  public init(enabled: Bool, activeCase: ConferenceCase?, expectedGitHubActor: String?) {
+  public init(
+    enabled: Bool,
+    activeCase: ConferenceCase?,
+    season: ConferenceSeason? = nil,
+    expectedGitHubActor: String?
+  ) {
     self.enabled = enabled
     self.activeCase = activeCase
+    self.season = season
     self.expectedGitHubActor = expectedGitHubActor
   }
 
   public static let disabled = ConferenceConfig(
     enabled: false,
     activeCase: nil,
+    season: nil,
     expectedGitHubActor: nil
   )
 
+  public var cases: [ConferenceCase] {
+    season?.cases ?? activeCase.map { [$0] } ?? []
+  }
+
+  public func currentCase(at date: Date) -> ConferenceCase? {
+    if let season {
+      return season.caseItem(at: date)
+    }
+    return activeCase
+  }
+
   /// Conference mode is an isolated deployment profile. Enabling it requires an explicit state
-  /// root, one operator-authored active-case file, and the GitHub bot actor the result must prove.
+  /// root, one operator-authored case or season file, and the GitHub actor the result must prove.
   /// The ordinary single-owner daemon stays unchanged while this flag is absent.
   public static func load(environment: [String: String]) throws -> ConferenceConfig {
     let enabled = try bool(environment[EnvKey.enabled])
@@ -36,32 +56,37 @@ public struct ConferenceConfig: Sendable, Equatable {
       throw ConferenceConfigError.explicitStateRootRequired
     }
 
-    guard let rawPath = clean(environment[EnvKey.caseFile]), rawPath.hasPrefix("/") else {
+    let casePath = clean(environment[EnvKey.caseFile])
+    let seasonPath = clean(environment[EnvKey.seasonFile])
+    guard casePath != nil || seasonPath != nil else {
       throw ConferenceConfigError.invalidSetting(EnvKey.caseFile)
     }
-    let data: Data
-    do {
-      data = try Data(contentsOf: URL(fileURLWithPath: rawPath))
-    } catch {
-      throw ConferenceConfigError.unreadableCaseFile
-    }
-    guard data.count <= 128 * 1024 else {
-      throw ConferenceConfigError.caseFileTooLarge
+    guard casePath == nil || seasonPath == nil else {
+      throw ConferenceConfigError.invalidSetting(EnvKey.seasonFile)
     }
 
-    let activeCase: ConferenceCase
-    do {
-      activeCase = try JSONDecoder().decode(ConferenceCase.self, from: data)
-    } catch {
-      throw ConferenceConfigError.invalidCaseFile
+    let activeCase: ConferenceCase?
+    let season: ConferenceSeason?
+    if let casePath {
+      activeCase = try loadCase(at: casePath)
+      season = nil
+    } else if let seasonPath {
+      activeCase = nil
+      season = try loadSeason(at: seasonPath)
+    } else {
+      throw ConferenceConfigError.invalidSetting(EnvKey.caseFile)
     }
-    try validate(activeCase)
 
     guard let actor = clean(environment[EnvKey.expectedGitHubActor]), validGitHubLogin(actor) else {
       throw ConferenceConfigError.invalidSetting(EnvKey.expectedGitHubActor)
     }
 
-    return ConferenceConfig(enabled: true, activeCase: activeCase, expectedGitHubActor: actor)
+    return ConferenceConfig(
+      enabled: true,
+      activeCase: activeCase,
+      season: season,
+      expectedGitHubActor: actor
+    )
   }
 }
 
@@ -71,6 +96,9 @@ public enum ConferenceConfigError: Error, Sendable, Equatable, CustomStringConve
   case unreadableCaseFile
   case caseFileTooLarge
   case invalidCaseFile
+  case unreadableSeasonFile
+  case seasonFileTooLarge
+  case invalidSeasonFile
   case coderRequired
   case isolatedCoderHomeRequired
   case githubTokenRequired
@@ -89,6 +117,12 @@ public enum ConferenceConfigError: Error, Sendable, Equatable, CustomStringConve
       return "Conference case file exceeds 128 KiB"
     case .invalidCaseFile:
       return "Conference case file is invalid"
+    case .unreadableSeasonFile:
+      return "Conference season file cannot be read"
+    case .seasonFileTooLarge:
+      return "Conference season file exceeds 128 KiB"
+    case .invalidSeasonFile:
+      return "Conference season file is invalid"
     case .coderRequired:
       return "Conference workflow requires CLAW_CODER_ENABLED=true"
     case .isolatedCoderHomeRequired:
@@ -104,6 +138,68 @@ public enum ConferenceConfigError: Error, Sendable, Equatable, CustomStringConve
 }
 
 private extension ConferenceConfig {
+  static func loadCase(at path: String) throws -> ConferenceCase {
+    guard path.hasPrefix("/") else {
+      throw ConferenceConfigError.invalidSetting(EnvKey.caseFile)
+    }
+    let data: Data
+    do {
+      data = try Data(contentsOf: URL(fileURLWithPath: path))
+    } catch {
+      throw ConferenceConfigError.unreadableCaseFile
+    }
+    guard data.count <= 128 * 1024 else {
+      throw ConferenceConfigError.caseFileTooLarge
+    }
+    guard let item = try? JSONDecoder().decode(ConferenceCase.self, from: data) else {
+      throw ConferenceConfigError.invalidCaseFile
+    }
+    try validate(item)
+    return item
+  }
+
+  static func loadSeason(at path: String) throws -> ConferenceSeason {
+    guard path.hasPrefix("/") else {
+      throw ConferenceConfigError.invalidSetting(EnvKey.seasonFile)
+    }
+    let data: Data
+    do {
+      data = try Data(contentsOf: URL(fileURLWithPath: path))
+    } catch {
+      throw ConferenceConfigError.unreadableSeasonFile
+    }
+    guard data.count <= 128 * 1024 else {
+      throw ConferenceConfigError.seasonFileTooLarge
+    }
+    guard let season = try? JSONDecoder().decode(ConferenceSeason.self, from: data) else {
+      throw ConferenceConfigError.invalidSeasonFile
+    }
+    try validate(season)
+    return season
+  }
+
+  static func validate(_ season: ConferenceSeason) throws {
+    let weekdays = season.days.map(\.weekday)
+    guard !season.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+      season.name.count <= 200,
+      !season.mission.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+      season.mission.count <= 20_000,
+      TimeZone(identifier: season.timeZone) != nil,
+      !season.days.isEmpty,
+      season.days.count <= ConferenceWeekday.allCases.count,
+      Set(weekdays).count == weekdays.count
+    else {
+      throw ConferenceConfigError.invalidSeasonFile
+    }
+    do {
+      for item in season.cases {
+        try validate(item)
+      }
+    } catch {
+      throw ConferenceConfigError.invalidSeasonFile
+    }
+  }
+
   static func bool(_ raw: String?) throws -> Bool {
     guard let value = clean(raw)?.lowercased() else {
       return false

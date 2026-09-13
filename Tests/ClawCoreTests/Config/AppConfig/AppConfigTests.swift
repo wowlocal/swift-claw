@@ -131,6 +131,54 @@ import Testing
     }
   }
 
+  @Test func groupTopicsParseAsExactChatAndThreadPairs() throws {
+    // given
+    let env = envWithLLM([
+      EnvKey.stateRoot: NSTemporaryDirectory(),
+      EnvKey.groupChats: "-1001,-1002",
+      EnvKey.groupTopics: "-1001:199, -1001:200, -1002:7",
+    ])
+
+    // when
+    let config = try AppConfig.load(environment: env)
+
+    // then
+    #expect(config.groupTopics == [-1001: [199, 200], -1002: [7]])
+  }
+
+  @Test(
+    "invalid group topic grants fail closed",
+    arguments: ["-1001", "-1001:", ":199", "-1001:0", "-1002:199", "-1001:199,"]
+  )
+  func invalidGroupTopicsFailClosed(raw: String) {
+    // given
+    let env = envWithLLM([
+      EnvKey.stateRoot: NSTemporaryDirectory(),
+      EnvKey.groupChats: "-1001",
+      EnvKey.groupTopics: raw,
+    ])
+
+    // when / then
+    #expect(throws: ConfigError.self) {
+      try AppConfig.load(environment: env)
+    }
+  }
+
+  @Test func telegramSilentMessagesIsOptIn() throws {
+    // given
+    let defaultEnvironment = envWithLLM([EnvKey.stateRoot: NSTemporaryDirectory()])
+    var silentEnvironment = defaultEnvironment
+    silentEnvironment[EnvKey.telegramSilentMessages] = "true"
+
+    // when
+    let defaultConfig = try AppConfig.load(environment: defaultEnvironment)
+    let silentConfig = try AppConfig.load(environment: silentEnvironment)
+
+    // then
+    #expect(defaultConfig.telegramSilentMessages == false)
+    #expect(silentConfig.telegramSilentMessages)
+  }
+
   @Test func defaultsPollTimeoutTo30() throws {
     // given
     let env = envWithLLM([EnvKey.stateRoot: NSTemporaryDirectory()])

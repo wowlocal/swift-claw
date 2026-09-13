@@ -215,7 +215,8 @@ private extension MessageRouter {
     let decision = accessControl.decide(
       chatKind: message.chatKind,
       chatId: message.chatId,
-      userId: message.userId
+      userId: message.userId,
+      messageThreadId: message.messageThreadId
     )
     let mode: ChatMode
     switch decision {

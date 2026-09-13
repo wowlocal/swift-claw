@@ -14,7 +14,8 @@ import Testing
       chatId: GroupApprovalFixture.chatId,
       memberUserIds: [GroupApprovalFixture.requesterId, GroupApprovalFixture.participantId]
     ),
-    groupAllowed: Bool = true
+    groupAllowed: Bool = true,
+    groupTopics: [Int64: Set<Int64>] = [:]
   ) -> ApprovalCallbackHandler {
     let transport = RecordingTransport()
     return ApprovalCallbackHandler.make(
@@ -22,7 +23,8 @@ import Testing
       delivery: transport,
       accessControl: AccessControl(
         allowlist: AllowlistStoreGRDB(writer: fixture.queue),
-        groupChats: groupAllowed ? [GroupApprovalFixture.chatId] : []
+        groupChats: groupAllowed ? [GroupApprovalFixture.chatId] : [],
+        groupTopics: groupTopics
       ),
       approvals: fixture.approvals,
       runs: fixture.runs,
@@ -36,13 +38,20 @@ import Testing
     )
   }
 
-  @Test func onlyConferenceRequesterCanResolve() async throws {
+  @Test func conferenceRequesterCanResolveWithoutMembershipLookup() async throws {
     // given
     let fixture = try GroupApprovalFixture(
       reason: .conferenceSubmit,
       tool: ConferenceToolNames.submit
     )
-    let callbackHandler = handler(fixture)
+    let callbackHandler = handler(
+      fixture,
+      membership: GroupMembershipStub(
+        chatId: GroupApprovalFixture.chatId,
+        memberUserIds: [],
+        fails: true
+      )
+    )
 
     // when — another current member taps the original prompt.
     _ = await callbackHandler.handle(fixture.callback(), updateId: 2)
@@ -80,7 +89,9 @@ import Testing
 
   enum Refusal: CaseIterable {
     case removedMember, unavailableMembership, unlistedGroup, copiedChat, copiedMessage
-    case undeliveredPrompt, missingRequester, wrongSession, mismatchedChat, wrongReason, wrongTool
+    case unlistedTopic, undeliveredPrompt, missingRequester, wrongSession, mismatchedChat,
+      wrongReason
+    case wrongTool
   }
 
   @Test(arguments: Refusal.allCases)
@@ -120,7 +131,8 @@ import Testing
         memberUserIds: refusal == .removedMember ? [] : [GroupApprovalFixture.participantId],
         fails: refusal == .unavailableMembership
       ),
-      groupAllowed: refusal != .unlistedGroup
+      groupAllowed: refusal != .unlistedGroup,
+      groupTopics: refusal == .unlistedTopic ? [GroupApprovalFixture.chatId: [999]] : [:]
     )
     let callback = fixture.callback(
       chatId: refusal == .copiedChat ? -100_456 : GroupApprovalFixture.chatId,

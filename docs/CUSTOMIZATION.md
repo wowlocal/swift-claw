@@ -465,14 +465,25 @@ daemon restarts; see the [operator recovery path](LOCAL_DEV.md#coder-background-
 ## Conference coding challenge
 
 `CLAW_CONFERENCE_ENABLED=true` selects a separate conference deployment in the groups configured
-by `CLAW_GROUP_CHATS`, including forum topics and General. It has a fixed challenge tool surface
-and no personal workspace, memory or recall context. It requires an
-explicit nonpersonal `CLAW_STATE_ROOT`, `CLAW_CONFERENCE_CASE_FILE`,
+by `CLAW_GROUP_CHATS`. By default it includes every forum topic and General; setting
+`CLAW_GROUP_TOPICS` to comma-separated `chat_id:thread_id` pairs admits only those exact topics.
+It has a fixed challenge tool surface and no personal workspace, memory or recall context. It requires an
+explicit nonpersonal `CLAW_STATE_ROOT`, exactly one of `CLAW_CONFERENCE_CASE_FILE` or
+`CLAW_CONFERENCE_SEASON_FILE`,
 `CLAW_CONFERENCE_EXPECTED_GITHUB_ACTOR`, enabled Coder and a dedicated GitHub bot-user `GH_TOKEN`.
 The Coder config home must resolve within the state root; Coder receives no publication token.
 Private messages and ordinary owner commands are refused in this profile. Make the bot a group
-administrator for approval membership checks. Address it with a mention or reply in the topic.
+member with Group Privacy disabled; administrator rights are not required. Conference approval
+authenticates the callback as the original requester's numeric Telegram ID and does not perform a
+`getChatMember` lookup. Address it with a mention or reply in the topic.
 Topic history is shared; other topics' history is excluded.
+
+A season file declares trusted `name`, `mission`, IANA `timeZone`, repository/baseline/base and up
+to one case per lowercase English weekday. On every turn, the daemon selects that weekday's case and
+injects the season, mission, project and active task into the system prompt. Days absent from `days`
+have no active case. The file is immutable for the running process; restart to load edits. Pending
+approvals become stale when the active day changes, while queued submissions retain their case
+snapshot.
 
 Presenting a complete solution opens its approval card without an extra conversational confirmation.
 The Russian card shows the case, complete proposal and publication destination: repository, base
@@ -582,6 +593,12 @@ longer uses fails `clawd doctor --check-config` the same way, with exit 10; `cla
   history and has relaxed tool approval behavior except for Coder submission, so run it under a
   separate nonpersonal state root and review
   [LOCAL_DEV.md](LOCAL_DEV.md#group-mode-telegram-forum-supergroup) before enabling it.
+- `CLAW_GROUP_TOPICS`: optional comma-separated `chat_id:thread_id` pairs. When set, the access gate
+  admits only those exact forum topics inside `CLAW_GROUP_CHATS`; it silently rejects every other
+  topic and General. An empty value preserves access to all topics in each listed group.
+- `CLAW_TELEGRAM_SILENT_MESSAGES`: `true` sends every new plain or rich bot message without an
+  audible Telegram notification. The default is `false`; typing indicators and message edits are
+  unaffected.
 - `CLAW_APPROVAL_EXPIRY`: seconds before a pending approval auto-denies (default 3600).
 - `CLAW_SEARCH_API_KEY`: Exa key; unset means the `web_search` tool is absent. Adding it
   after you have sealed does nothing on its own: once `secrets.enc` exists the daemon reads

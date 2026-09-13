@@ -149,6 +149,35 @@ struct ContextBuilderTests {
     #expect(before != after)
   }
 
+  @Test func dynamicSystemPromptIsRenderedAndFingerprinted() throws {
+    // given
+    let builder = ContextBuilder(
+      systemPrompt: "fallback policy",
+      proactiveSystemPrompt: "proactive policy",
+      workspace: FakeWorkspace(files: [:]),
+      memoryStore: FakeMemoryStore(),
+      retriever: FakeRetriever(),
+      budget: .default,
+      policyStaticSubhash: "sub",
+      systemPromptProvider: { "Tuesday Accessibility" },
+      now: { Date(timeIntervalSince1970: 0) }
+    )
+
+    // when
+    let result = try builder.assemble(snapshot: emptySnapshot(), sessionId: 1, origin: .interactive)
+
+    // then
+    #expect(result.messages[0].content.text.contains("Tuesday Accessibility"))
+    #expect(result.messages[0].content.text.contains("fallback policy") == false)
+    #expect(
+      result.policyVersion
+        == PolicyFingerprint.combined(
+          staticSubhash: "sub",
+          promptMaterials: ["Tuesday Accessibility", "proactive policy", "", "", ""]
+        )
+    )
+  }
+
   @Test func hardCapOverflowOmitsFileAndProducesOwnerNotice() throws {
     // given
     let builder = makeBuilder(

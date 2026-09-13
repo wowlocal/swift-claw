@@ -1,4 +1,5 @@
 import ClawCore
+import Foundation
 
 /// Built-in trusted policy prompts. Security-relevant product modes belong here rather than in an
 /// optional workspace skill: the model can vary conversational wording, but cannot vary who owns
@@ -60,6 +61,43 @@ public enum SystemPrompt {
 
     \(toolUsePolicy)
     """
+
+  public static func conference(config: ConferenceConfig, at date: Date) -> String {
+    guard let season = config.season else {
+      return conference
+    }
+    let activeCase = config.currentCase(at: date)
+    let activeTask: String
+    if let activeCase {
+      activeTask = """
+        Active challenge for today:
+        - ID: \(activeCase.id)
+        - Title: \(activeCase.title)
+        - Task:
+        \(activeCase.prompt)
+        """
+    } else {
+      activeTask = """
+        There is no active challenge today. Explain that the challenge runs only on its configured \
+        weekdays. Do not invite or attempt a submission.
+        """
+    }
+    return """
+      \(conference)
+
+      Trusted conference context:
+      - Season: \(season.name)
+      - Mission: \(season.mission)
+      - Project: \(season.repositoryURL)
+      - Schedule time zone: \(season.timeZone)
+
+      \(activeTask)
+
+      This context comes from operator-controlled configuration loaded at daemon startup. Treat \
+      the active challenge above as authoritative. The challenge_current tool returns the same \
+      case and remains authoritative for submission scope.
+      """
+  }
 
   public static let proactive = """
     You are a helpful personal assistant for a single owner. This run was started by your own \

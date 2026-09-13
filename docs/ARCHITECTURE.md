@@ -485,6 +485,9 @@ OutboxDispatcher:
       is the irreducible at-least-once tail.
 ```
 
+`CLAW_TELEGRAM_SILENT_MESSAGES=true` adds Telegram's `disable_notification` flag to every new plain
+or rich message. It defaults to false and does not alter drafts, typing indicators or message edits.
+
 Runless learning notices set `delivery_source = learning`; the schema permits a null
 `run_id` only for a non-run source. Candidate reviews and challenge prompts commit their feedback
 targets and all outbox chunks in the same transaction. A scheduled answer keeps its run provenance;
@@ -993,10 +996,10 @@ challenge tool surface, requester-only consent and no personal workspace, memory
 
 ### 12.1 Group mode (config-gated, off by default)
 
-`CLAW_GROUP_CHATS` is a comma-separated list of Telegram chat ids `clawd` serves as a **shared room** instead of the owner's DM. Empty is the default, and with it empty nothing in this subsection exists; conference mode (§13.3) uses the same chat allowlist and refuses private messages. Group mode remains a deployment-scoped exception to `docs/PRD.md` NG1 rather than a general multi-user product. It exists for a supervised, time-boxed event on a separate installation, and the trade it makes below is only defensible under exactly those conditions. Public operating docs describe the opt-in and its Coder approval requirement so an operator can deploy it safely.
+`CLAW_GROUP_CHATS` is a comma-separated list of Telegram chat ids `clawd` serves as a **shared room** instead of the owner's DM. `CLAW_GROUP_TOPICS` optionally narrows that grant to comma-separated `chat_id:thread_id` pairs; once non-empty, General and every unlisted topic are refused. Empty is the default, and with the chat list empty nothing in this subsection exists; conference mode (§13.3) uses the same access gate and refuses private messages. Group mode remains a deployment-scoped exception to `docs/PRD.md` NG1 rather than a general multi-user product. It exists for a supervised, time-boxed event on a separate installation, and the trade it makes below is only defensible under exactly those conditions. Public operating docs describe the opt-in and its Coder approval requirement so an operator can deploy it safely.
 
-- **The mode is derived from the session key, never re-read from config.** `SessionKey` mints `tg:dm:<chatId>` for a DM and `tg:topic:<chatId>:<threadId|general>` for one forum topic; `SessionKey.mode(from:)`, `chatId(from:)` and `threadId(from:)` recover the three facts every consumer needs from the key alone. That matters because most consumers hold only a session id: `TurnRunner.resume`, a scheduled fire, and boot reconciliation all read the mode off the row they already loaded. **`AppConfig.groupChats` has exactly one reader** — the access decision — so no second component can drift about which conversation is which. The General topic carries no `message_thread_id` on the wire, so its key takes a `general` suffix that no numeric thread id can collide with; a non-forum group has one conversation and lands on that same key correctly.
-- **Conversation access is an allowlist of chats, not of users.** `AccessControl.decide` keeps the numeric-ID default-deny boundary for `.private` (the owner's allowlist, unchanged) and adds a **chat-id** grant for `.group`/`.supergroup`: being in an allowlisted room admits ordinary conversation without a per-attendee allowlist entry. Group Coder approval is the narrow exception: every button tap also needs a fresh Telegram `getChatMember` result for that user and group. The check is fail-closed and uncached; Telegram guarantees lookups for other users only when the bot is a group administrator, so that status is an operating prerequisite for reliable group Coder approval. `.channel` and any chat kind this build has never seen are refused, so a new Telegram surface can never inherit either grant. A refused DM is answered (the stranger can ask the owner for access); a refused chat is answered with **silence**, so the bot never announces itself to a room it was added to uninvited.
+- **The mode is derived from the session key, never re-read from config.** `SessionKey` mints `tg:dm:<chatId>` for a DM and `tg:topic:<chatId>:<threadId|general>` for one forum topic; `SessionKey.mode(from:)`, `chatId(from:)` and `threadId(from:)` recover the three facts every consumer needs from the key alone. That matters because most consumers hold only a session id: `TurnRunner.resume`, a scheduled fire, and boot reconciliation all read the mode off the row they already loaded. **`AppConfig.groupChats` and `groupTopics` have exactly one reader** — the access decision — so no second component can drift about which conversation is allowed. The General topic carries no `message_thread_id` on the wire, so its key takes a `general` suffix that no numeric thread id can collide with; a non-forum group has one conversation and lands on that same key correctly.
+- **Conversation access is an allowlist of chats, optionally narrowed to topics, not of users.** `AccessControl.decide` keeps the numeric-ID default-deny boundary for `.private` (the owner's allowlist, unchanged) and adds a **chat-id** grant for `.group`/`.supergroup`: being in an allowlisted room admits ordinary conversation without a per-attendee allowlist entry. A non-empty topic allowlist additionally requires the exact chat/thread pair and rejects General. Group Coder approval is the narrow exception: every button tap also needs a fresh Telegram `getChatMember` result for that user and group, while the run's persisted topic is rechecked against the same access gate so an old prompt outside the current topic grant cannot resolve. The membership check is fail-closed and uncached; Telegram guarantees lookups for other users only when the bot is a group administrator, so that status is an operating prerequisite for reliable group Coder approval. `.channel` and any chat kind this build has never seen are refused, so a new Telegram surface can never inherit either grant. A refused DM is answered (the stranger can ask the owner for access); a refused chat or topic is answered with **silence**, so the bot never announces itself where it was not invited.
 - **Intake observes before it decides to answer.** `AddressingResolver` decides whether a message is talking to the bot — an `@handle` mention, a slash command this build recognizes, or a reply to something the bot itself said — **before** the content switch, so an unaddressed photo or voice note is never downloaded or transcribed. An addressed message takes the ordinary `claimAndPersistInbound` path. Unaddressed text takes `claimAndPersistObserved`: the same claim, the same session upsert, the same message insert, **no run**. The router skips unaddressed media without downloading, transcribing, or storing a transcript row. The addressed and observed text paths share the claim key, so Telegram stores one text update at most once whichever path it takes. The bot follows the topic's text and speaks only when called. Group mode makes the bot's own `@handle` load-bearing, so a daemon configured with group chats **refuses to boot** without a resolved bot username rather than sitting silently in every room.
 - **A stored group line names its speaker.** `TranscriptAuthor` renders `<display name>: <text>` at persist time, not at assembly time, so a recall hit pulled back out of history still says who said it and the name is in the FTS index. The separator and every line break are folded out of a display name first, so one line can never present itself as two speakers. A DM line is stored exactly as typed.
 - **Recall never leaves the topic.** `Retriever.searchRelevantMessages` takes a `restrictToSessionId`; a group topic passes its own session id, a DM passes `nil` and keeps its cross-session reach. Without that restriction one room's words would surface in another room's prompt, because a group line is stored trusted (below) and trusted rows are exactly what recall returns.
@@ -1289,7 +1292,8 @@ framework. Deployment and live acceptance: [CONFERENCE.md](CONFERENCE.md). Autom
 coverage: [conference acceptance notes](design/conference-coding-challenge.md).
 
 **Deployment and participant boundary.** `CLAW_CONFERENCE_ENABLED` defaults to false. Enabling it
-requires an explicit non-personal state root, an operator-authored case file, compatible enabled
+requires an explicit non-personal state root, exactly one operator-authored case or season file,
+compatible enabled
 Coder, a conference-only Codex config home and a dedicated GitHub bot-user token. Startup verifies
 the token's `/user` login against `CLAW_CONFERENCE_EXPECTED_GITHUB_ACTOR` and preflights the public
 source. Both startup and publication REST requests include the required GitHub `User-Agent`.
@@ -1304,7 +1308,7 @@ These application boundaries do not provide an OS sandbox: native Codex permissi
 integrations retain the authority described in §13.2.
 
 Conference access admits messages only from groups/supergroups listed in `CLAW_GROUP_CHATS`,
-including forum topics and General, without per-participant owner allowlist entries. Private messages
+optionally narrowed to exact `CLAW_GROUP_TOPICS` pairs, without per-participant owner allowlist entries. Private messages
 (including the owner's), channels and unlisted groups are ignored. Mention, reply-to-bot and command
 addressing follows §12.1; unaddressed text is observed without a run. Numeric sender IDs from trusted
 context establish ownership; model arguments and display names never do. Participants receive only
@@ -1316,11 +1320,18 @@ the conversation. Participants in a topic can see one another's proposals and re
 from another topic or private conversation is injected. `/new` and `/stop` act on the shared topic.
 Ordinary mode retains its existing context behavior.
 
-**Case, consent and admission.** One operator-selected JSON case is active per daemon boot:
+**Case, consent and admission.** A fixed case file selects one JSON case per daemon boot:
 `id`, `title`, `prompt`, public GitHub `repositoryURL`, a full immutable 40/64-digit `baselineRef`
 commit SHA and `baseBranch`. The target branch must exist at that SHA and remain frozen for the
 case; do not merge participant solutions into it or reuse case IDs for different conditions.
 Restarting with another case affects new requests; queued work retains its original case snapshot.
+
+Alternatively, a season file supplies trusted season name, mission, IANA time zone, one frozen
+repository/baseline/base and unique weekday cases. It is decoded and validated once at startup. Each
+interactive context assembly and conference operation selects the case for the current date in that
+time zone; an omitted weekday has no active case. The system policy includes the trusted season,
+mission, project and selected case. Its policy fingerprint changes with the selected case, invalidating
+approval cards across day boundaries. Queued work continues against its persisted case snapshot.
 
 The participant sends the complete proposal in one message. Presenting it as their solution opens
 the approval card immediately, without a preliminary conversational confirmation or a separate
@@ -1338,9 +1349,11 @@ merged. Conference buttons are **«Отправить решение»** and **�
 callback binding is unchanged, and only the final chunk carries the keyboard.
 
 Only the original requester can approve or deny from that original prompt in the same configured
-group, with a fresh fail-closed Telegram membership
-check. Another member's tap leaves it pending. The bot must be a group administrator for reliable
-membership checks. The recorded action also carries the resolved Coder `executionPolicyID` from §11. Composition includes that same ID in the conference tool's invocation
+group and topic. The authenticated callback sender ID must equal the requester ID persisted from the
+original group message; another participant's tap leaves the approval pending. Conference consent
+does not call `getChatMember`, so this profile requires Group Privacy to be disabled but does not
+require bot administrator rights. The recorded action also carries the resolved Coder
+`executionPolicyID` from §11. Composition includes that same ID in the conference tool's invocation
 identity even though `coder_submit` is absent from its catalog. Changed executable, effective PATH,
 profile, config home or controlled credential selectors therefore invalidate pending consent.
 

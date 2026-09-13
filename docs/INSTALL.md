@@ -91,7 +91,8 @@ sudo install -m755 .build/release/clawd /usr/local/bin/clawd
 ```
 
 From a source checkout the config template is `.env.example` in the repository root, and
-the service files are under `deploy/`.
+the service files are under `deploy/`. The optional `CLAW_TELEGRAM_SILENT_MESSAGES=true` setting
+makes every new plain or rich Telegram message arrive without an audible notification.
 
 ## 3. Verify downloads (optional)
 
@@ -192,11 +193,16 @@ uncertain lookup leaves the approval pending. Keep group mode on its required se
 state root; see [LOCAL_DEV.md](LOCAL_DEV.md#group-mode-telegram-forum-supergroup).
 
 The separate [conference challenge profile](CONFERENCE.md) requires a dedicated nonpersonal
-host/account and state root. Set `CLAW_GROUP_CHATS` to the conference group ID and make the bot a
-group administrator. Participants use mentions or replies in that group's topics; private messages
-are ignored. Only a proposal's author can confirm it. Its supervisor publishes with a dedicated
-GitHub bot-user token; that token is removed from Coder's child environment. Configure and authenticate the conference
-Codex home within the state root, including after symlink resolution, before starting the service.
+host/account and state root. Set `CLAW_GROUP_CHATS` to the conference group ID and disable Group
+Privacy in BotFather, removing and re-adding an existing group bot after the change. Participants use
+mentions or replies in that group's topics; private messages are ignored. To admit only selected
+topics, set `CLAW_GROUP_TOPICS` to comma-separated
+`chat_id:thread_id` pairs; every other topic and General are then ignored. Only a proposal's author
+can confirm it. Its supervisor publishes with a dedicated GitHub bot-user token; that token is
+removed from Coder's child environment. Configure and authenticate the conference Codex home within
+the state root, including after symlink resolution, before starting the service. Select either
+`CLAW_CONFERENCE_CASE_FILE` for one fixed case or `CLAW_CONFERENCE_SEASON_FILE` for automatic
+weekday selection in the season's configured time zone.
 
 ### Staying on after logout
 

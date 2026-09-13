@@ -63,7 +63,8 @@ struct RunComposition {
     let transport = TelegramClient(
       token: secrets.telegramBotToken,
       http: clients.telegram.executor,
-      downloadHTTP: clients.tool.executor
+      downloadHTTP: clients.tool.executor,
+      silentMessages: config.telegramSilentMessages
     )
 
     do {

@@ -88,6 +88,7 @@ extension DaemonBuilder {
       accessControl: AccessControl(
         allowlist: stores.allowlist,
         groupChats: config.groupChats,
+        groupTopics: config.groupTopics,
         conferenceProfile: conferenceProfile
       ),
       delivery: transport,

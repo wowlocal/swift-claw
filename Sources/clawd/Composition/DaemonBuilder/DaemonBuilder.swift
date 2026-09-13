@@ -109,6 +109,7 @@ struct DaemonBuilder: Sendable {
       mcpTools: mcpStack.tools,
       coderTools: coder.tools,
       conferenceProfile: conference.enabled,
+      conferenceConfig: conference.config,
       conferenceTools: conference.tools
     )
 

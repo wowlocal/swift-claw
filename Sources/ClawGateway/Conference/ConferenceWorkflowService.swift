@@ -50,7 +50,7 @@ public actor ConferenceWorkflowService: ConferenceServing, Service {
     guard config.enabled else {
       throw ConferenceError.disabled
     }
-    guard let activeCase = config.activeCase else {
+    guard let activeCase = config.currentCase(at: now()) else {
       throw ConferenceError.noActiveCase
     }
     return activeCase

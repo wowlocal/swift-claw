@@ -25,6 +25,7 @@ extension DaemonBuilder {
     mcpTools: [any Tool],
     coderTools: [any Tool] = [],
     conferenceProfile: Bool = false,
+    conferenceConfig: ConferenceConfig = .disabled,
     conferenceTools: [any Tool] = []
   ) -> AgentStack {
     let toolDispatcher = makeToolDispatcher(
@@ -42,12 +43,21 @@ extension DaemonBuilder {
       toolDispatcher: toolDispatcher,
       costResolver: costResolver
     )
+    let systemPromptProvider: (@Sendable () -> String)?
+    if conferenceProfile {
+      systemPromptProvider = {
+        SystemPrompt.conference(config: conferenceConfig, at: now())
+      }
+    } else {
+      systemPromptProvider = nil
+    }
     let contextBuilder = makeContextBuilder(
       workspace: workspace,
       fenceLabels: ToolFenceLabels(definitions: toolDispatcher.definitions),
       policyStaticSubhash: staticSubhash,
       toolDefinitions: toolDispatcher.definitions,
       systemPrompt: conferenceProfile ? SystemPrompt.conference : SystemPrompt.minimal,
+      systemPromptProvider: systemPromptProvider,
       conferenceProfile: conferenceProfile
     )
     return AgentStack(toolDispatcher: toolDispatcher, agent: agent, contextBuilder: contextBuilder)
@@ -59,6 +69,7 @@ extension DaemonBuilder {
     policyStaticSubhash: String,
     toolDefinitions: [ToolDefinition],
     systemPrompt: String = SystemPrompt.minimal,
+    systemPromptProvider: (@Sendable () -> String)? = nil,
     conferenceProfile: Bool = false
   ) -> ContextBuilder {
     let messageInputTokens = TokenEstimator.messageInputBudget(
@@ -99,6 +110,7 @@ extension DaemonBuilder {
       budget: contextBudget,
       fenceLabels: fenceLabels,
       policyStaticSubhash: policyStaticSubhash,
+      systemPromptProvider: systemPromptProvider,
       warn: { warning in
         logger.warning("\(warning)")
       }

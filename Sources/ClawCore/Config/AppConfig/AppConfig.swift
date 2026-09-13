@@ -4,6 +4,8 @@ public struct AppConfig: Sendable, Equatable {
   public enum EnvKey {
     static let allowlist = "CLAW_ALLOWLIST"
     static let groupChats = "CLAW_GROUP_CHATS"
+    static let groupTopics = "CLAW_GROUP_TOPICS"
+    static let telegramSilentMessages = "CLAW_TELEGRAM_SILENT_MESSAGES"
     /// Public because the auth commands resolve the same state root without loading this config.
     /// The daemon and `clawd auth` have to read the one variable, or they diverge on where an
     /// owner's credentials live.
@@ -104,6 +106,10 @@ public struct AppConfig: Sendable, Equatable {
   /// The chat ids group mode serves. Empty means group mode is off and `clawd` answers only the
   /// owner's DM.
   public let groupChats: Set<Int64>
+  /// Optional exact topic grants keyed by group chat id. Empty grants every topic in a listed chat.
+  public let groupTopics: [Int64: Set<Int64>]
+  /// Whether new Telegram messages suppress audible notifications for their recipients.
+  public let telegramSilentMessages: Bool
   public let stateRoot: URL
   public let pollTimeoutSeconds: Int
 
@@ -143,6 +149,8 @@ public struct AppConfig: Sendable, Equatable {
   public init(
     allowlist: Set<Int64>,
     groupChats: Set<Int64>,
+    groupTopics: [Int64: Set<Int64>] = [:],
+    telegramSilentMessages: Bool = false,
     stateRoot: URL,
     pollTimeoutSeconds: Int,
     llm: LLMConfig,
@@ -166,6 +174,8 @@ public struct AppConfig: Sendable, Equatable {
   ) {
     self.allowlist = allowlist
     self.groupChats = groupChats
+    self.groupTopics = groupTopics
+    self.telegramSilentMessages = telegramSilentMessages
     self.stateRoot = stateRoot
     self.pollTimeoutSeconds = pollTimeoutSeconds
 
@@ -205,6 +215,15 @@ public struct AppConfig: Sendable, Equatable {
       from: env[EnvKey.groupChats],
       invalid: ConfigError.invalidGroupChats
     )
+    let groupTopics = try parseGroupTopics(
+      from: env[EnvKey.groupTopics],
+      allowedChats: groupChats
+    )
+    let telegramSilentMessages = try boolValue(
+      env[EnvKey.telegramSilentMessages],
+      key: EnvKey.telegramSilentMessages,
+      default: false
+    )
     let stateRoot = try StateRootResolver.createStateRoot(for: env[EnvKey.stateRoot])
     let pollTimeoutSeconds =
       env[EnvKey.pollTimeout].flatMap(Int.init) ?? EnvDefaults.pollTimeoutSeconds
@@ -240,6 +259,8 @@ public struct AppConfig: Sendable, Equatable {
     return AppConfig(
       allowlist: allowlist,
       groupChats: groupChats,
+      groupTopics: groupTopics,
+      telegramSilentMessages: telegramSilentMessages,
       stateRoot: stateRoot,
       pollTimeoutSeconds: pollTimeoutSeconds,
       llm: llm,
@@ -348,6 +369,37 @@ private extension AppConfig {
     }
 
     return ids
+  }
+
+  /// Parses `chat_id:thread_id` pairs. When any pair is configured, only those exact topics are
+  /// admitted; requiring every chat id to exist in `CLAW_GROUP_CHATS` catches split allowlists.
+  static func parseGroupTopics(
+    from environmentValue: String?,
+    allowedChats: Set<Int64>
+  ) throws -> [Int64: Set<Int64>] {
+    guard
+      let environmentValue = environmentValue?.trimmingCharacters(in: .whitespaces),
+      !environmentValue.isEmpty
+    else {
+      return [:]
+    }
+
+    var topics: [Int64: Set<Int64>] = [:]
+    for part in environmentValue.split(separator: ",", omittingEmptySubsequences: false) {
+      let trimmed = part.trimmingCharacters(in: .whitespaces)
+      let pieces = trimmed.split(separator: ":", omittingEmptySubsequences: false)
+      guard
+        pieces.count == 2,
+        let chatId = Int64(pieces[0].trimmingCharacters(in: .whitespaces)),
+        let threadId = Int64(pieces[1].trimmingCharacters(in: .whitespaces)),
+        allowedChats.contains(chatId),
+        threadId > 0
+      else {
+        throw ConfigError.invalidGroupTopics(trimmed)
+      }
+      topics[chatId, default: []].insert(threadId)
+    }
+    return topics
   }
 }
 

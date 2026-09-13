@@ -15,7 +15,12 @@ import Testing
         body: Data(#"{"ok":true,"result":{"message_id":99,"chat":{"id":42}}}"#.utf8)
       )
     )
-    let telegram = TelegramClient(token: "T", http: executor, baseURL: "https://example.test")
+    let telegram = TelegramClient(
+      token: "T",
+      http: executor,
+      baseURL: "https://example.test",
+      silentMessages: true
+    )
 
     // when
     let messageId = try await telegram.sendRichMessage(chatId: 42, markdown: "**hi**")
@@ -30,5 +35,6 @@ import Testing
     // then — link previews are disabled unconditionally (ARCHITECTURE §12)
     let linkPreviewOptions = try #require(json["link_preview_options"] as? [String: Any])
     #expect(linkPreviewOptions["is_disabled"] as? Bool == true)
+    #expect(json["disable_notification"] as? Bool == true)
   }
 }

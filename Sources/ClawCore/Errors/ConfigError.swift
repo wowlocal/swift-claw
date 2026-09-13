@@ -1,6 +1,7 @@
 public enum ConfigError: Error, Sendable, Equatable {
   case invalidAllowlist(String)
   case invalidGroupChats(String)
+  case invalidGroupTopics(String)
   case unwritableStateRoot(String)
   case missingLLMBaseURL
   case missingLLMModel

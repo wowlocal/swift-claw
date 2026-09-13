@@ -8,6 +8,85 @@ import Testing
 @testable import clawd
 
 @Suite struct ConferenceContextIsolationTests {
+  @Test func conferenceContextUsesTheSeasonCaseForTheCurrentLocalWeekday() async throws {
+    // given
+    let root = try makeTemporaryRoot(prefix: "conference-season-context")
+    defer { try? FileManager.default.removeItem(at: root) }
+    let config = try AppConfig.load(environment: [
+      AppConfig.EnvKey.stateRoot: root.path,
+      AppConfig.EnvKey.llmModel: CompositionAcceptance.qualifiedModel,
+    ])
+    let http = ScriptedHTTPExecutor([])
+    var builder = try CompositionAcceptance.makeBuilder(http: http, config: config)
+    builder.now = { Date(timeIntervalSince1970: 1_789_459_200) }
+    let workspace = FileSystemWorkspace(root: root.appendingPathComponent("workspace"))
+    let providerStack = try builder.makeRosterStack(http: http)
+    let sandbox = await builder.prepareSandbox()
+    let cooldown = PrimaryRouteCooldown(longSeconds: 900, clock: ContinuousClock())
+    let season = ConferenceSeason(
+      name: "Podlodka iOS Crew #18",
+      mission: "Find the black box and return to base.",
+      timeZone: "Europe/Moscow",
+      repositoryURL: "https://github.com/wowlocal/crew18-sim",
+      baselineRef: String(repeating: "a", count: 40),
+      baseBranch: "main",
+      days: [
+        ConferenceDay(
+          weekday: .tuesday,
+          id: "accessibility",
+          title: "Accessibility",
+          prompt: "Make submarine controls accessible."
+        ),
+        ConferenceDay(
+          weekday: .wednesday,
+          id: "logging",
+          title: "Logging",
+          prompt: "Add an expedition log."
+        ),
+      ]
+    )
+
+    // when
+    let agent = builder.makeAgentStack(
+      roster: providerStack.roster,
+      cooldown: cooldown,
+      workspace: workspace,
+      costResolver: CostResolver(
+        priceTable: PriceFileLoader.load(),
+        referenceUSDPerToken: 0.00001
+      ),
+      sandbox: sandbox,
+      mcpTools: [],
+      conferenceProfile: true,
+      conferenceConfig: ConferenceConfig(
+        enabled: true,
+        activeCase: nil,
+        season: season,
+        expectedGitHubActor: "wowlocal"
+      )
+    )
+    let result = try agent.contextBuilder.assemble(
+      snapshot: SessionContextSnapshot(
+        sessionKey: SessionKey.telegramTopic(chatId: -100, threadId: 199),
+        history: [],
+        historyMessageIds: [],
+        windowStartMessageId: 0,
+        isTainted: false,
+        hasPrivateData: false
+      ),
+      sessionId: 1,
+      origin: .interactive
+    )
+
+    // then
+    let context = result.messages.map { $0.content.text }.joined(separator: "\n")
+    #expect(context.contains(season.name))
+    #expect(context.contains(season.mission))
+    #expect(context.contains(season.repositoryURL))
+    #expect(context.contains("Accessibility"))
+    #expect(context.contains("Logging") == false)
+  }
+
   @Test func conferenceContextKeepsParticipantHistoryWithoutSharedPrivateMaterial() async throws {
     // given — two real private conversations and shared workspace/memory on the same database.
     let root = try makeTemporaryRoot(prefix: "conference-context")

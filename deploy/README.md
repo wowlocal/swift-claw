@@ -11,6 +11,9 @@ Service files shipped with every release:
 - `com.ivanmagda.swift-claw.plist` — launchd LaunchAgent (macOS).
 - `swift-claw.service` — systemd user service (Linux).
 
+Set `CLAW_TELEGRAM_SILENT_MESSAGES=true` in `clawd.env` when all new bot messages should suppress
+audible Telegram notifications; the default remains `false`.
+
 Install, start, update, and uninstall instructions — for both the scripted
 `~/.swift-claw` layout and the manual `/usr/local/bin` layout — live in
 [docs/INSTALL.md](../docs/INSTALL.md).
@@ -60,8 +63,12 @@ See [INSTALL.md](../docs/INSTALL.md#coder-prerequisites) and
 [LOCAL_DEV.md](../docs/LOCAL_DEV.md#coder-background-lifecycle-and-recovery).
 
 For the separate [conference challenge profile](../docs/CONFERENCE.md), use a dedicated
-nonpersonal service account, state root and GitHub bot-user token. Configure `CLAW_GROUP_CHATS`
-and make the bot a group administrator. The profile serves those groups/topics only; private messages
-are ignored and each proposal requires its author's confirmation. Its Coder config home must
+nonpersonal service account, state root and GitHub bot-user token. Configure `CLAW_GROUP_CHATS`,
+disable Group Privacy in BotFather and re-add the bot if that setting changed while it was a member.
+Administrator rights are not required. Optional `CLAW_GROUP_TOPICS` entries restrict the profile
+to exact `chat_id:thread_id` pairs. Private messages are ignored and each proposal requires its
+author's confirmation. Its Coder config home must
 resolve within that state root; the supervisor publishes draft PRs and removes the publication
 credential from Coder's environment. Follow the conference runbook before opening participant access.
+The profile accepts either a fixed `CLAW_CONFERENCE_CASE_FILE` or a weekday-driven
+`CLAW_CONFERENCE_SEASON_FILE`; configure exactly one.

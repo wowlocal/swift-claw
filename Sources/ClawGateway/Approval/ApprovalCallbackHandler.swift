@@ -167,23 +167,26 @@ private extension ApprovalCallbackHandler {
         accessControl.decide(
           chatKind: .supergroup,
           chatId: context.deliveryTarget.chatId,
-          userId: callback.fromUserId
+          userId: callback.fromUserId,
+          messageThreadId: context.deliveryTarget.messageThreadId
         ) == .allowed(.group)
       else {
         return nil
       }
 
-      do {
-        guard
-          try await membership.isCurrentMember(
-            chatId: context.deliveryTarget.chatId,
-            userId: callback.fromUserId
-          )
-        else {
+      if approval.reason != .conferenceSubmit {
+        do {
+          guard
+            try await membership.isCurrentMember(
+              chatId: context.deliveryTarget.chatId,
+              userId: callback.fromUserId
+            )
+          else {
+            return nil
+          }
+        } catch {
           return nil
         }
-      } catch {
-        return nil
       }
 
       return ApprovalResolutionActor(actor: .groupMember, userId: callback.fromUserId)

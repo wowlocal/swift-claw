@@ -48,6 +48,98 @@ public struct ConferenceCase: Sendable, Equatable, Codable {
   }
 }
 
+public enum ConferenceWeekday: String, Sendable, Codable, CaseIterable {
+  case sunday
+  case monday
+  case tuesday
+  case wednesday
+  case thursday
+  case friday
+  case saturday
+
+  init?(calendarWeekday: Int) {
+    guard (1...Self.allCases.count).contains(calendarWeekday) else {
+      return nil
+    }
+    self = Self.allCases[calendarWeekday - 1]
+  }
+}
+
+public struct ConferenceDay: Sendable, Equatable, Codable {
+  public let weekday: ConferenceWeekday
+  public let id: String
+  public let title: String
+  public let prompt: String
+
+  public init(weekday: ConferenceWeekday, id: String, title: String, prompt: String) {
+    self.weekday = weekday
+    self.id = id
+    self.title = title
+    self.prompt = prompt
+  }
+}
+
+public struct ConferenceSeason: Sendable, Equatable, Codable {
+  public let name: String
+  public let mission: String
+  public let timeZone: String
+  public let repositoryURL: String
+  public let baselineRef: String
+  public let baseBranch: String
+  public let days: [ConferenceDay]
+
+  public init(
+    name: String,
+    mission: String,
+    timeZone: String,
+    repositoryURL: String,
+    baselineRef: String,
+    baseBranch: String,
+    days: [ConferenceDay]
+  ) {
+    self.name = name
+    self.mission = mission
+    self.timeZone = timeZone
+    self.repositoryURL = repositoryURL
+    self.baselineRef = baselineRef
+    self.baseBranch = baseBranch
+    self.days = days
+  }
+
+  public var cases: [ConferenceCase] {
+    days.map(caseItem)
+  }
+
+  public func caseItem(at date: Date) -> ConferenceCase? {
+    guard let timeZone = TimeZone(identifier: timeZone) else {
+      return nil
+    }
+    var calendar = Calendar(identifier: .gregorian)
+    calendar.timeZone = timeZone
+    guard
+      let weekday = ConferenceWeekday(
+        calendarWeekday: calendar.component(.weekday, from: date)
+      ), let day = days.first(where: { $0.weekday == weekday })
+    else {
+      return nil
+    }
+    return caseItem(day)
+  }
+}
+
+private extension ConferenceSeason {
+  func caseItem(_ day: ConferenceDay) -> ConferenceCase {
+    ConferenceCase(
+      id: day.id,
+      title: day.title,
+      prompt: day.prompt,
+      repositoryURL: repositoryURL,
+      baselineRef: baselineRef,
+      baseBranch: baseBranch
+    )
+  }
+}
+
 public struct ConferenceApprovedOrigin: Sendable, Equatable, Codable {
   public let runID: Int64
   public let sessionID: Int64

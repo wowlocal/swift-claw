@@ -6,6 +6,7 @@ import ClawCore
 public enum AccessDenial: Sendable, Equatable {
   case privateStranger
   case unlistedChat
+  case unlistedTopic
 }
 
 /// The verdict for one inbound message: the mode it runs in, or the reason it was refused.
@@ -18,15 +19,18 @@ public enum AccessDecision: Sendable, Equatable {
 public struct AccessControl: Sendable {
   private let allowlist: any AllowlistStore
   private let groupChats: Set<Int64>
+  private let groupTopics: [Int64: Set<Int64>]
   private let conferenceProfile: Bool
 
   public init(
     allowlist: any AllowlistStore,
     groupChats: Set<Int64>,
+    groupTopics: [Int64: Set<Int64>] = [:],
     conferenceProfile: Bool = false
   ) {
     self.allowlist = allowlist
     self.groupChats = groupChats
+    self.groupTopics = groupTopics
     self.conferenceProfile = conferenceProfile
   }
 
@@ -41,7 +45,12 @@ public struct AccessControl: Sendable {
     }
   }
 
-  public func decide(chatKind: ChatKind, chatId: Int64, userId: Int64) -> AccessDecision {
+  public func decide(
+    chatKind: ChatKind,
+    chatId: Int64,
+    userId: Int64,
+    messageThreadId: Int64? = nil
+  ) -> AccessDecision {
     switch chatKind {
     case .private:
       guard !conferenceProfile else {
@@ -49,7 +58,14 @@ public struct AccessControl: Sendable {
       }
       return isAllowed(userId: userId) ? .allowed(.direct) : .denied(.privateStranger)
     case .group, .supergroup:
-      return groupChats.contains(chatId) ? .allowed(.group) : .denied(.unlistedChat)
+      guard groupChats.contains(chatId) else {
+        return .denied(.unlistedChat)
+      }
+      guard groupTopics.isEmpty else {
+        let allowed = messageThreadId.map { groupTopics[chatId]?.contains($0) == true } ?? false
+        return allowed ? .allowed(.group) : .denied(.unlistedTopic)
+      }
+      return .allowed(.group)
     case .channel, .other:
       return .denied(.unlistedChat)
     }

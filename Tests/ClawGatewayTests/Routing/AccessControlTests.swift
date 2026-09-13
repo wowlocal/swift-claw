@@ -102,4 +102,27 @@ import Testing
     #expect(access.decide(chatKind: .private, chatId: 42, userId: 42) == .denied(.unlistedChat))
     #expect(access.isAllowed(userId: 42) == false)
   }
+
+  @Test func configuredGroupTopicsDenyEveryOtherTopicAndGeneral() {
+    // given
+    let access = AccessControl(
+      allowlist: StubAllowlist(allowed: [42]),
+      groupChats: [-100],
+      groupTopics: [-100: [199]]
+    )
+
+    // when / then
+    #expect(
+      access.decide(chatKind: .supergroup, chatId: -100, userId: 7, messageThreadId: 199)
+        == .allowed(.group)
+    )
+    #expect(
+      access.decide(chatKind: .supergroup, chatId: -100, userId: 7, messageThreadId: 200)
+        == .denied(.unlistedTopic)
+    )
+    #expect(
+      access.decide(chatKind: .supergroup, chatId: -100, userId: 7)
+        == .denied(.unlistedTopic)
+    )
+  }
 }

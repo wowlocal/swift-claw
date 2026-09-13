@@ -59,6 +59,8 @@ Nothing else is required. To have clawd finish a turn on a second model when the
 cannot answer, set `CLAW_LLM_FALLBACK_MODEL`; it stays off until you do.
 [CUSTOMIZATION.md](CUSTOMIZATION.md#a-second-route-to-fall-back-to) covers that route, what
 it costs you, and what clawd tells you when it switches.
+Set `CLAW_TELEGRAM_SILENT_MESSAGES=true` when every new bot message should arrive without an
+audible Telegram notification; the default is `false`.
 
 On a ChatGPT subscription, clear the prefilled `CLAW_LLM_BASE_URL` and `CLAW_LLM_API_KEY`,
 then get your `CLAW_LLM_MODEL` value from
@@ -303,7 +305,8 @@ including the requester, can approve or deny from that request's original approv
 checks the participant's current membership with Telegram for every tap and fails closed if the check
 is unavailable. Make the bot a group administrator so Telegram guarantees `getChatMember` checks for
 other users. The person who asked remains the job owner; only that requester can inspect or cancel the
-job, from the same topic. Other group tool behavior is unchanged.
+job, from the same topic. To serve selected topics only, set `CLAW_GROUP_TOPICS` to comma-separated
+`chat_id:thread_id` pairs. Other group tool behavior is unchanged.
 
 N is configurable with `CLAW_CODER_MAX_CONCURRENT_JOBS` (default 1), and full means busy. Completion
 uses existing outbox retries, without another LLM turn. Child billing and child-reported usage are
@@ -313,7 +316,10 @@ are in [CUSTOMIZATION.md](CUSTOMIZATION.md#coder-configuration).
 For the separate conference deployment, follow [CONFERENCE.md](CONFERENCE.md). That profile
 accepts proposals in configured groups/topics, queues them after their author's confirmation and
 publishes draft PRs through a dedicated bot account. Results return to the original topic; private
-messages are ignored. It replaces the ordinary personal tool and context surface.
+messages are ignored. Disable Group Privacy for the bot; conference confirmation binds the original
+author's numeric ID without requiring administrator rights. It replaces the ordinary personal tool
+and context surface. Configure either one fixed case file or a season file that selects a case by
+weekday in its declared time zone; conference configuration is loaded once at daemon startup.
 
 ## Troubleshooting
 

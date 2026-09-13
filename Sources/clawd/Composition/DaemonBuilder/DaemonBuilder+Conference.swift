@@ -80,7 +80,7 @@ extension DaemonBuilder {
     guard config.coder.enabled, let coderService = coder.service else {
       throw ConferenceConfigError.coderRequired
     }
-    guard let activeCase = conference.activeCase else {
+    guard !conference.cases.isEmpty else {
       throw ConferenceConfigError.invalidCaseFile
     }
     guard let expectedActor = conference.expectedGitHubActor,
@@ -91,7 +91,9 @@ extension DaemonBuilder {
     }
 
     let source = ConferenceRepositorySource(stateRoot: config.stateRoot)
-    _ = try await source.prepare(activeCase)
+    for item in conference.cases {
+      _ = try await source.prepare(item)
+    }
     let publisher = try ConferenceGitHubPublisher(
       stateRoot: config.stateRoot,
       token: token,
@@ -117,15 +119,18 @@ extension DaemonBuilder {
       logger: logger,
       now: now
     )
-    let identity = PolicyFingerprint.hash(parts: [
-      "conference-coding-challenge-v2-judge",
-      activeCase.id,
-      activeCase.repositoryURL,
-      activeCase.baselineRef,
-      activeCase.baseBranch,
-      expectedActor,
-      coder.executionPolicyID,
-    ])
+    let caseIdentity = conference.cases.flatMap { item in
+      [item.id, item.title, item.prompt, item.repositoryURL, item.baselineRef, item.baseBranch]
+    }
+    let seasonIdentity =
+      conference.season.map { season in
+        [season.name, season.mission, season.timeZone]
+      } ?? []
+    let identity = PolicyFingerprint.hash(
+      parts: ["conference-coding-challenge-v3-schedule"] + seasonIdentity + caseIdentity + [
+        expectedActor, coder.executionPolicyID,
+      ]
+    )
     let redactor = SecretRedactor(secretValues: redactionValues)
     let tools: [any Tool] = [
       ConferenceCurrentTool(service: service),
