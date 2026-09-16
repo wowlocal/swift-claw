@@ -1,10 +1,10 @@
 import ClawCore
-import ClawData
 import ClawTestSupport
 import Foundation
 import GRDB
 import Testing
 
+@testable import ClawData
 @testable import ClawGateway
 
 /// The delivery identity moved off the run and onto the row's own `dedup_key`, so a message that
@@ -51,6 +51,56 @@ import Testing
     #expect(sends.map(\.markdown) == ["your answer", "candidate ready"])
     #expect(try seeded.outbox.pendingOutbound().isEmpty)
   }
+
+  @Test func uncertainConferenceNoticeQuarantinesOnlyItsUnsentRemainder() throws {
+    // given — one partially sent multipart conference notice and an unrelated runless notice
+    let seeded = try makeSeededFixture()
+    let affectedID = try #require(UUID(uuidString: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"))
+    let unrelatedID = try #require(UUID(uuidString: "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"))
+    for ordinal in 0...2 {
+      _ = try seeded.outbox.claimConferenceNotice(
+        Self.conferenceNotice(
+          submissionID: affectedID,
+          originRunID: seeded.runId,
+          ordinal: ordinal
+        )
+      )
+    }
+    _ = try seeded.outbox.claimConferenceNotice(
+      Self.conferenceNotice(
+        submissionID: unrelatedID,
+        originRunID: seeded.runId,
+        ordinal: 2
+      )
+    )
+    let firstKey = Self.conferenceKey(submissionID: affectedID, ordinal: 0)
+    let uncertainKey = Self.conferenceKey(submissionID: affectedID, ordinal: 1)
+    try seeded.outbox.markSent(deliveryKey: firstKey, telegramMessageId: 10, now: Date())
+
+    // when
+    try seeded.outbox.markDeliveryUncertain(deliveryKey: uncertainKey)
+
+    // then — the sent prefix stays SENT, the uncertain remainder is FAILED, and another subject
+    // remains PENDING for normal delivery
+    let statuses = try seeded.writer.read { db in
+      try Row.fetchAll(
+        db,
+        sql: "SELECT dedup_key, status FROM outbound_deliveries ORDER BY dedup_key"
+      ).reduce(into: [String: String]()) { result, row in
+        result[row["dedup_key"]] = row["status"]
+      }
+    }
+    #expect(statuses[firstKey] == OutboxDeliveryStatus.sent.rawValue)
+    #expect(statuses[uncertainKey] == OutboxDeliveryStatus.failed.rawValue)
+    #expect(
+      statuses[Self.conferenceKey(submissionID: affectedID, ordinal: 2)]
+        == OutboxDeliveryStatus.failed.rawValue
+    )
+    #expect(
+      statuses[Self.conferenceKey(submissionID: unrelatedID, ordinal: 2)]
+        == OutboxDeliveryStatus.pending.rawValue
+    )
+  }
 }
 
 // MARK: - Fixtures
@@ -63,6 +113,28 @@ private extension OutboxDeliveryIdentityTests {
       chatId: 42,
       payload: "candidate ready",
       payloadHash: "hash"
+    )
+  }
+
+  static func conferenceNotice(
+    submissionID: UUID,
+    originRunID: Int64,
+    ordinal: Int
+  ) -> ConferenceNoticeChunk {
+    ConferenceNoticeChunk(
+      submissionID: submissionID,
+      originRunID: originRunID,
+      ordinal: ordinal,
+      chatId: 42,
+      payload: "conference result \(ordinal)",
+      payloadHash: "hash-\(ordinal)"
+    )
+  }
+
+  static func conferenceKey(submissionID: UUID, ordinal: Int) -> String {
+    OutboxDedupKey.make(
+      subjectDigest: "conference:\(submissionID.uuidString.lowercased())",
+      ordinal: ordinal
     )
   }
 

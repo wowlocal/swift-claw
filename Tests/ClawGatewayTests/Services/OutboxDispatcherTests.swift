@@ -29,6 +29,10 @@ private struct MarkSentFailingOutbox: OutboxStore {
     throw StoreError.diskFull
   }
 
+  func markDeliveryUncertain(deliveryKey: String) throws(StoreError) {
+    try base.markDeliveryUncertain(deliveryKey: deliveryKey)
+  }
+
   func pendingOutbound() throws(StoreError) -> [OutboxRow] { try base.pendingOutbound() }
 }
 
@@ -101,6 +105,64 @@ private actor DeliverySpy: MessageDelivery {
       outcomes[chatId] = .floodControl(retryAfter: retryAfter, times: times - 1)
       throw TelegramError.floodControl(retryAfter: retryAfter)
     }
+  }
+}
+
+private actor CancellationAmbiguityDelivery: MessageDelivery {
+  let sendStarted = AsyncGate()
+  private let cancellationObserved = AsyncGate()
+  private(set) var plainAttempts = 0
+
+  func sendMessage(
+    to target: DeliveryTarget,
+    text: String,
+    replyMarkup: String?
+  ) async throws -> Int64 {
+    plainAttempts += 1
+    return 1
+  }
+
+  func sendRichMessage(
+    to target: DeliveryTarget,
+    markdown: String,
+    replyMarkup: String?
+  ) async throws -> Int64 {
+    sendStarted.open()
+    await withTaskCancellationHandler {
+      await cancellationObserved.wait()
+    } onCancel: {
+      cancellationObserved.open()
+    }
+    throw HTTPTransportFailure(
+      disposition: .mayHaveBeenSent,
+      safeMessage: "shutdown after request handoff"
+    )
+  }
+}
+
+private actor DefiniteFailureDelivery: MessageDelivery {
+  private(set) var richAttempts = 0
+  private(set) var plainAttempts = 0
+
+  func sendMessage(
+    to target: DeliveryTarget,
+    text: String,
+    replyMarkup: String?
+  ) async throws -> Int64 {
+    plainAttempts += 1
+    return 1
+  }
+
+  func sendRichMessage(
+    to target: DeliveryTarget,
+    markdown: String,
+    replyMarkup: String?
+  ) async throws -> Int64 {
+    richAttempts += 1
+    throw HTTPTransportFailure(
+      disposition: .definitelyNotSent,
+      safeMessage: "connection refused before request handoff"
+    )
   }
 }
 
@@ -259,6 +321,53 @@ private final class RetryWaitHold: Sendable {
 
     // then — never marked SENT, so it stays PENDING for the next drain (at-least-once)
     #expect(try fixture.outbox.pendingOutbound().count == 1)
+  }
+
+  @Test func ambiguousSendQuarantinesTheWholeLogicalReply() async throws {
+    // given — two ordered chunks and a transport canceled after the first request handoff
+    let fixture = try makeFixture()
+    try seedPending(fixture, stepIndex: 0, payload: "first")
+    try seedPending(fixture, stepIndex: 1, payload: "second")
+    let delivery = CancellationAmbiguityDelivery()
+    let dispatcher = OutboxDispatcher(
+      outbox: fixture.outbox,
+      delivery: delivery,
+      signal: OutboxSignal(),
+      logger: TestLog.silent
+    )
+
+    // when — daemon shutdown cancels the in-flight send after Telegram may have accepted it
+    let drain = Task {
+      await dispatcher.drainOnce()
+    }
+    await delivery.sendStarted.wait()
+    drain.cancel()
+    await drain.value
+
+    // then — cancellation cannot trigger a plain double-send or leave chunks to replay on restart
+    #expect(await delivery.plainAttempts == 0)
+    #expect(try fixture.outbox.pendingOutbound().isEmpty)
+  }
+
+  @Test func definitePreSendFailureUsesPlainFallback() async throws {
+    // given — the rich request provably sent no bytes, while the plain fallback can deliver
+    let fixture = try makeFixture()
+    try seedPending(fixture, payload: "hello")
+    let delivery = DefiniteFailureDelivery()
+    let dispatcher = OutboxDispatcher(
+      outbox: fixture.outbox,
+      delivery: delivery,
+      signal: OutboxSignal(),
+      logger: TestLog.silent
+    )
+
+    // when
+    await dispatcher.drainOnce()
+
+    // then — a definite failure remains eligible for fallback instead of being quarantined
+    #expect(await delivery.richAttempts == 1)
+    #expect(await delivery.plainAttempts == 1)
+    #expect(try fixture.outbox.pendingOutbound().isEmpty)
   }
 
   @Test func bootDrainRecoversRowsCommittedByAPriorRun() async throws {

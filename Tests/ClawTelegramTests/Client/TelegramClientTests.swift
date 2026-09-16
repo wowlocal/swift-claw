@@ -1,3 +1,4 @@
+import ClawTestSupport
 import Foundation
 import Testing
 
@@ -206,6 +207,44 @@ private func client(status: Int, json: String) -> TelegramClient {
     let message = try #require(thrownMessage)
     #expect(message.contains("SECRET-123:abc") == false)
     #expect(message.contains(SecretRedactor.replacement))
+  }
+
+  @Test(arguments: [
+    HTTPTransmissionDisposition.definitelyNotSent,
+    HTTPTransmissionDisposition.mayHaveBeenSent,
+  ])
+  func transportDispositionSurvivesTelegramRedaction(
+    _ disposition: HTTPTransmissionDisposition
+  ) async throws {
+    // given — the HTTP seam reports exactly how far the failed request progressed
+    let executor = ScriptedHTTPExecutor([
+      .responding { request in
+        throw HTTPTransportFailure(
+          disposition: disposition,
+          safeMessage: "connection lost for \(request.url)"
+        )
+      }
+    ])
+    let telegram = TelegramClient(
+      token: "SECRET-123:abc",
+      http: executor,
+      baseURL: "https://example.test"
+    )
+
+    // when
+    var thrown: HTTPTransportFailure?
+    await #expect {
+      _ = try await telegram.getMe()
+    } throws: { error in
+      thrown = error as? HTTPTransportFailure
+      return thrown != nil
+    }
+
+    // then — callers can quarantine the send without exposing the token
+    let failure = try #require(thrown)
+    #expect(failure.disposition == disposition)
+    #expect(failure.safeMessage.contains("SECRET-123:abc") == false)
+    #expect(failure.safeMessage.contains(SecretRedactor.replacement))
   }
 
   @Test func setMyCommandsPostsCorrectPayload() async throws {

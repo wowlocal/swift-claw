@@ -35,10 +35,10 @@ public struct OutboxStoreGRDB: OutboxStore {
     try database.writeMapping { db in
       try db.execute(
         sql: """
-          UPDATE outbound_deliveries SET status = 'SENT', telegram_message_id = ?, sent_ts = ?
+          UPDATE outbound_deliveries SET status = ?, telegram_message_id = ?, sent_ts = ?
           WHERE dedup_key = ?
           """,
-        arguments: [telegramMessageId, now, deliveryKey]
+        arguments: [OutboxDeliveryStatus.sent.rawValue, telegramMessageId, now, deliveryKey]
       )
       try db.execute(
         sql: """
@@ -46,6 +46,58 @@ public struct OutboxStoreGRDB: OutboxStore {
           WHERE id = (SELECT approval_id FROM outbound_deliveries WHERE dedup_key = ?)
           """,
         arguments: [telegramMessageId, deliveryKey]
+      )
+    }
+  }
+
+  public func markDeliveryUncertain(deliveryKey: String) throws(StoreError) {
+    try database.writeMapping { db in
+      guard
+        let row = try Row.fetchOne(
+          db,
+          sql: "SELECT run_id, step_index FROM outbound_deliveries WHERE dedup_key = ?",
+          arguments: [deliveryKey]
+        )
+      else {
+        return
+      }
+
+      let stepIndex: Int = row["step_index"]
+      if let runId: Int64 = row["run_id"] {
+        try db.execute(
+          sql: """
+            UPDATE outbound_deliveries SET status = ?
+            WHERE run_id = ? AND step_index >= ? AND status = ?
+            """,
+          arguments: [
+            OutboxDeliveryStatus.failed.rawValue,
+            runId,
+            stepIndex,
+            OutboxDeliveryStatus.pending.rawValue,
+          ]
+        )
+        return
+      }
+
+      guard let separator = deliveryKey.lastIndex(of: ":") else {
+        throw StoreError.unexpected("Runless outbox key has no ordinal separator")
+      }
+      let subjectPrefix = String(deliveryKey[..<separator])
+      try db.execute(
+        sql: """
+          UPDATE outbound_deliveries SET status = ?
+          WHERE run_id IS NULL AND step_index >= ? AND status = ?
+            AND substr(dedup_key, 1, length(?)) = ?
+            AND substr(dedup_key, length(?) + 1, 1) = ':'
+          """,
+        arguments: [
+          OutboxDeliveryStatus.failed.rawValue,
+          stepIndex,
+          OutboxDeliveryStatus.pending.rawValue,
+          subjectPrefix,
+          subjectPrefix,
+          subjectPrefix,
+        ]
       )
     }
   }
@@ -58,9 +110,10 @@ public struct OutboxStoreGRDB: OutboxStore {
           SELECT dedup_key, run_id, step_index, chat_id, payload, approval_id, reply_markup,
             message_thread_id, reply_to_message_id
           FROM outbound_deliveries
-          WHERE status = 'PENDING'
+          WHERE status = ?
           ORDER BY run_id IS NULL, run_id, step_index, dedup_key
-          """
+          """,
+        arguments: [OutboxDeliveryStatus.pending.rawValue]
       ).map { row in
         OutboxRow(
           deliveryKey: row["dedup_key"],

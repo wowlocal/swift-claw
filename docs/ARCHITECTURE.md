@@ -465,7 +465,13 @@ SchedulerService ticks every 60s
 
 ### 6.4 Outbound delivery — transactional outbox (NORMATIVE, Inc 1)
 
-Exactly-once across the network is **impossible**. We implement an honest **at-least-once outbox** with idempotent completion.
+Exactly-once across the network is **impossible**. The outbox retries attempts known not to have
+reached Telegram and records successful delivery idempotently. A typed `mayHaveBeenSent` transport
+failure is different: Telegram may already have created the message, so the affected chunk and the
+remaining chunks of that logical reply transition to `FAILED` and require operator review rather
+than automatic replay. This at-most-once-unknown edge prevents a daemon restart loop from spamming
+the same message. A send that succeeds before its local `SENT` write fails remains the irreducible
+at-least-once duplicate tail.
 
 ```
 table outbound_deliveries(
@@ -481,8 +487,9 @@ OutboxDispatcher:
   (2) Send via sendMessage (or editMessageText for streaming coalesce).
   (3) On HTTP 200 → UPDATE status=SENT, telegram_message_id=<id>, sent_ts.
   (4) On crash/replay: rows still PENDING are re-sent; INSERT OR IGNORE +
-      deterministic dedup_key prevent duplicate rows; a true network double-send
-      is the irreducible at-least-once tail.
+      deterministic dedup_key prevent duplicate rows.
+  (5) On mayHaveBeenSent: mark this and the remaining logical-reply chunks FAILED;
+      never use the plain fallback and never replay them automatically.
 ```
 
 `CLAW_TELEGRAM_SILENT_MESSAGES=true` adds Telegram's `disable_notification` flag to every new plain
@@ -497,7 +504,7 @@ key, so runless messages use the same retry and idempotent completion path.
 **Two honestly-distinct idempotency mechanisms** (do not conflate them):
 
 - **(a) DB-internal dedup** via `INSERT OR IGNORE` inside one `db.write` txn — true for inbound `update_id`, `provider_usage`, `audit_events`.
-- **(b) External side effects** via the transactional outbox — intent committed → effect performed **at-least-once** → completion recorded idempotently.
+- **(b) External side effects** via the transactional outbox — intent committed → effect attempted → definite pre-send failures retried; ambiguous handoff outcomes quarantined; completion recorded idempotently.
 
 **Ordering invariant:** the inbound message + the run row **COMMIT before** the outbound reply is sent. So a disk-full/crash stops the turn before an unrecoverable side effect.
 
@@ -1439,8 +1446,10 @@ Terminal state is persisted before claiming conference outbox chunks keyed by su
 and chunk ordinal. The notification marker is recorded only after all chunks are claimed;
 retrying an interrupted enqueue reuses the existing chunks. Each runless chunk derives its topic
 and reply-to message from the original run using the same outbox target resolver as conversational
-replies. This gives one durable logical completion notice; inherited Telegram delivery remains
-at-least-once if an acknowledgment is lost.
+replies. This gives one durable logical completion notice. A response lost after Telegram request
+handoff is quarantined as an unknown delivery outcome instead of being replayed automatically;
+operators use the submission status or GitHub record to verify whether a completion notice needs
+manual recovery.
 `challenge_status` uses trusted requester context and returns only that participant's submission
 from the same chat/topic session, including an older case queried by UUID. Persistent
 remote permission/push failures and `needs_review` require operator intervention; v1 has no retry
@@ -1829,7 +1838,7 @@ empty healthy state.
 - **Failures are wrapped, not merely typed.** `ProviderFailure` pairs the cause with the §8.4 attempt-exposure accounting disposition, and `ProviderInferenceCancellation` carries it out of the buffered path. **The runtime branches on that disposition, never on which execution method the caller used.** Clean head rejections (auth, access, quota, other) are `notStarted` and write **no** estimated usage row; once a body was handed off, every failure without a proven clean rejection is `mayHaveStarted` — transport loss before the head, failure under an accepted 2xx head, terminal-free EOF, malformed or oversized SSE, parsed provider errors — and records conservative usage. **None of those ambiguous failures is retried automatically.**
 - **Error handling:** tool/run failures captured as observations, not crashes; the loop stays alive; typed errors at boundaries.
 - **Retries/backoff:** one layer, retryable-only classifier, capped exponential + full jitter, retry budget (~3/req), honor `retry_after`. **An attempt that may have been sent is never retried automatically** (§8.4), and one budget counts every wire attempt of a call — refresh, replay recovery, throttle, and server retries alike. Retries count against budgets (§5.3).
-- **Idempotency:** synchronous `claimUpdate` dedup for inbound; deterministic outbox keys for outbound; at-least-once delivery (§6.4).
+- **Idempotency:** synchronous `claimUpdate` dedup for inbound; deterministic outbox keys for outbound; definite pre-send failures retry while ambiguous handoff outcomes quarantine (§6.4).
 - **Cancellation:** cooperative throughout; `/stop` (→ CANCELLED) and `/new` (→ SUPERSEDED) via the SessionActor; a plain message queues.
 - **Degradation UX (user-visible contract):** on provider failure/timeout after retries → "I couldn't reach the model, try again" (no secrets/stack); on budget exhaustion → "I stopped because <cap> was hit"; the typing indicator is cleared. On `SQLITE_FULL`/disk-full → refuse new turns + reply "storage full" once + do **not** crash-loop; doctor free-disk preflight. 409 → loud doctor surfacing + startup lock prevents a second poller.
 - **A route switch is audited and announced on transitions only** (§8.6). The switch appends a `provider_fallback` audit row whose `decision` is the failure kind that caused it, and the turn's reply carries one notice naming both routes; the turn where the primary answers again carries the matching restored notice. **No notice on the steady state in between**, because an owner who is told every turn stops reading it. A turn that switched and then failed anyway reports the primary's cause with one added sentence that the backup was tried, so the reply neither hides the switch nor buries the actionable failure.

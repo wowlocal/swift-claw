@@ -758,8 +758,9 @@ This scenario uses the real router, durable approval, Coder service, SQLite stor
 dispatcher with scripted LLM, native backend and Telegram boundaries. After approval it holds the
 backend, observes an ordinary reply in the same conversation, then releases the backend and verifies
 the saved result and automatic completion delivery to the authenticated origin without another LLM
-turn. Replaying the outbox wake keeps one completion row; failed network delivery retains the
-existing at-least-once retry semantics.
+turn. Replaying the outbox wake keeps one completion row. A failure proven to precede request
+handoff remains retryable; an ambiguous post-handoff failure quarantines the logical reply for
+operator review instead of risking duplicate Telegram messages.
 
 ### Live validation recorded on 2026-09-07
 

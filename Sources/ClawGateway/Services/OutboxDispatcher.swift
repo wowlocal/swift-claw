@@ -34,7 +34,8 @@ public struct OutboxSignal: Sendable {
 /// returned `telegram_message_id` on success. It drains once on boot — recovering rows a
 /// prior run committed but never sent (a crash between commit and send) — then again on every poke
 /// the `TurnRunner` fires after a commit. Delivery is `sendRichMessage` with a plain `sendMessage`
-/// fallback on any rich-send error.
+/// fallback when Telegram rejects the rich representation before accepting a message. An ambiguous
+/// transport failure is quarantined rather than retried because Telegram may already have sent it.
 ///
 /// Telegram rate-limits per chat, so a 429 puts only that chat on hold: its rows wait out the
 /// `retry_after` the API asked for while every other chat's rows keep draining.
@@ -105,8 +106,24 @@ public struct OutboxDispatcher<ClockType: Clock>: Service where ClockType.Durati
       do {
         messageId = try await send(row)
       } catch {
-        // A send interrupted by shutdown is not a fault — the row stays PENDING and boot recovery
-        // redelivers it; only a genuine failure is worth a warning.
+        if Self.transmissionDisposition(error) == .mayHaveBeenSent {
+          do {
+            try outbox.markDeliveryUncertain(deliveryKey: row.deliveryKey)
+          } catch {
+            logger.error(
+              "outbox could not quarantine uncertain delivery \(row.deliveryKey): \(error)"
+            )
+          }
+          logger.error(
+            """
+            outbox delivery outcome is unknown for \(row.originLabel) step \(row.stepIndex); \
+            automatic retry disabled to prevent duplicate messages
+            """
+          )
+          break
+        }
+        // A send interrupted before request handoff is not a fault — the row stays PENDING, and
+        // boot recovery redelivers it; only a genuine failure is worth a warning.
         if Task.isCancelled {
           break
         }
@@ -153,10 +170,10 @@ public struct OutboxDispatcher<ClockType: Clock>: Service where ClockType.Durati
 
   /// Delivers one row, returning the Telegram `message_id` so the caller can record it via `markSent`.
   ///
-  /// Sends the payload as rich markdown; on a rich-send error it re-sends the same payload as
-  /// plain `sendMessage` so a malformed-markdown reply still lands. Flood control is the exception:
-  /// a 429 answers the request rather than its formatting, so retrying it as plain text would spend
-  /// a second call against the very limit that just fired.
+  /// Sends the payload as rich markdown; on a definite rich-send rejection it re-sends the same
+  /// payload as plain `sendMessage` so a malformed-markdown reply still lands. Flood control and an
+  /// ambiguous transport outcome never take the fallback: the former names its retry window, while
+  /// the latter may already have created the message.
   /// `replyMarkup` (the inline keyboard) rides both the rich send and the plain fallback, so a
   /// degraded delivery never drops the approval keyboard. A failure of the plain fallback itself
   /// propagates — the row stays PENDING for the next drain.
@@ -168,7 +185,9 @@ public struct OutboxDispatcher<ClockType: Clock>: Service where ClockType.Durati
         replyMarkup: row.replyMarkup
       )
     } catch {
-      if Self.floodControlRetryAfter(error) != nil {
+      if Self.floodControlRetryAfter(error) != nil
+        || Self.transmissionDisposition(error) == .mayHaveBeenSent
+      {
         throw error
       }
       logger.warning(
@@ -207,6 +226,12 @@ private extension OutboxDispatcher {
       return nil
     }
     return retryAfter
+  }
+
+  static func transmissionDisposition(
+    _ error: any Error
+  ) -> HTTPTransmissionDisposition? {
+    (error as? HTTPTransportFailure)?.disposition
   }
 }
 

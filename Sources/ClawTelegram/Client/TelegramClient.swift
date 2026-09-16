@@ -277,6 +277,11 @@ extension TelegramClient {
         jsonBody: payload,
         timeoutSeconds: httpTimeout
       )
+    } catch let failure as HTTPTransportFailure {
+      throw HTTPTransportFailure(
+        disposition: failure.disposition,
+        safeMessage: sanitize("\(methodName): \(failure.safeMessage)")
+      )
     } catch {
       throw TelegramError.transport(sanitize("\(methodName): \(error)"))
     }

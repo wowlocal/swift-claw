@@ -31,6 +31,12 @@ public enum DeliverySource: String, Sendable, Equatable, CaseIterable {
   case conference
 }
 
+public enum OutboxDeliveryStatus: String, Sendable, Equatable {
+  case pending = "PENDING"
+  case sent = "SENT"
+  case failed = "FAILED"
+}
+
 public struct LearningNoticeChunk: Sendable, Equatable {
   public let subjectDigest: String
   public let ordinal: Int
@@ -138,6 +144,7 @@ public protocol OutboxStore: Sendable {
   func claimNotice(_ chunk: LearningNoticeChunk) throws(StoreError) -> Bool
   func claimConferenceNotice(_ chunk: ConferenceNoticeChunk) throws(StoreError) -> Bool
   func markSent(deliveryKey: String, telegramMessageId: Int64, now: Date) throws(StoreError)
+  func markDeliveryUncertain(deliveryKey: String) throws(StoreError)
   func pendingOutbound() throws(StoreError) -> [OutboxRow]
 }
 
